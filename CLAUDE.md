@@ -46,6 +46,13 @@ in `SECURITY.md`.
 - **Artifacts are discovered by filesystem diff**, not by parsing Codex's output. Do not add
   output parsing; it is brittle and Codex's format is not a contract.
 - **Every tool returns a readable error result**, never an unhandled rejection.
+- **Inline budgets are measured in base64 characters, never file bytes.** A raw-byte budget
+  understates the payload by a third and lets an image just under the limit produce a larger
+  response than one far over it. There is a per-image budget and a per-response total.
+- **Anything not inlined is still reachable**, via a `resource_link` plus `resources/read`,
+  and carries a note explaining why it was not inlined. Nothing is dropped silently.
+- **Resource reads honour the same root confinement as the tools.** `resources/read` goes
+  through `readArtifact`, so a path outside `CODEX_MCP_ROOT` is refused.
 
 ## Windows specifics
 
@@ -64,6 +71,10 @@ This project is developed on Windows and these were all real bugs. Do not "simpl
 ## Conventions
 
 - Comments explain *why*, especially for the platform workarounds above. Do not remove them.
+- Size control belongs in this server, not in the prompt. Codex's built-in `image_gen` tool
+  does not accept `quality` or `output_format` as arguments (those are fallback-CLI-only
+  controls), and gpt-image-2 requires at least 655,360 pixels per image, so a generated PNG is
+  essentially always too large to inline untouched. Enforce limits in code.
 - Prompts sent to Codex are pass-through. Codex is an agent that already knows how to work;
   over-scripting its prompt causes it to take worse paths (an early version instructed it to
   call an image API, which made it ignore its own native image tool).

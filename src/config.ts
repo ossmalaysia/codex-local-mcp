@@ -21,8 +21,14 @@ export const config = {
   maxTimeoutSec: num("CODEX_MAX_TIMEOUT_SEC", 1800),
   /** Codex output is capped so a runaway build log cannot flood the caller. */
   maxOutputChars: num("CODEX_MAX_OUTPUT_CHARS", 40_000),
-  /** Images below this size are inlined as base64; bigger ones are path-only. */
-  maxInlineImageBytes: num("CODEX_MAX_INLINE_IMAGE_BYTES", 1_048_576),
+  /**
+   * Budgets are measured in BASE64 CHARACTERS, not file bytes, because that is
+   * what the client actually receives and counts. Encoding inflates by 4/3, so
+   * a budget expressed in file bytes silently overshoots by a third.
+   */
+  maxInlineImageB64: num("CODEX_MAX_INLINE_IMAGE_B64", 350_000),
+  /** Ceiling for ALL inlined images in one response combined. */
+  maxResponseB64: num("CODEX_MAX_RESPONSE_B64", 750_000),
   /** Cap on how many changed files we report. */
   maxReportedFiles: num("CODEX_MAX_REPORTED_FILES", 200),
   /** Image APIs need the network; workspace-write blocks it unless we opt in. */

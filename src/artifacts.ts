@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
-import { makePreview } from "./preview.js";
+import { b64Length, makePreview } from "./preview.js";
 
 const IMAGE_MIME: Record<string, string> = {
   ".png": "image/png",
@@ -22,6 +22,14 @@ export interface FileReport {
   note?: string;
 }
 
+/** A file the caller can fetch on demand instead of receiving inline. */
+export interface ResourceLink {
+  uri: string;
+  name: string;
+  mimeType?: string;
+  description: string;
+}
+
 export interface InlineImage {
   path: string;
   mimeType: string;
@@ -32,7 +40,12 @@ export interface InlineImage {
 export interface ArtifactReport {
   files: FileReport[];
   images: InlineImage[];
+  links: ResourceLink[];
   truncated: boolean;
+}
+
+function fileUri(absPath: string): string {
+  return `file:///${absPath.replace(/\\/g, "/").replace(/^\//, "")}`;
 }
 
 /**
@@ -48,6 +61,8 @@ export async function collectArtifacts(
 
   const files: FileReport[] = [];
   const images: InlineImage[] = [];
+  const links: ResourceLink[] = [];
+  let spent = 0;
 
   for (const rel of selected) {
     const abs = path.join(workspace, rel);
@@ -59,33 +74,54 @@ export async function collectArtifacts(
     }
 
     const mimeType = imageMimeType(rel);
+    const link: ResourceLink = {
+      uri: fileUri(abs),
+      name: rel,
+      mimeType,
+      description: `${bytes} bytes, produced in this workspace`,
+    };
+
     if (!mimeType || bytes === 0) {
       files.push({ path: rel, bytes, inlined: false });
+      links.push(link);
       continue;
     }
 
-    if (bytes <= config.maxInlineImageBytes) {
+    const remaining = Math.min(config.maxInlineImageB64, config.maxResponseB64 - spent);
+    if (remaining <= 0) {
+      files.push({ path: rel, bytes, inlined: false, note: "response image budget spent" });
+      links.push(link);
+      continue;
+    }
+
+    // Send the original only when its ENCODED size fits; otherwise downscale.
+    if (b64Length(bytes) <= remaining) {
       try {
-        images.push({ path: rel, mimeType, data: (await fs.readFile(abs)).toString("base64") });
+        const data = (await fs.readFile(abs)).toString("base64");
+        images.push({ path: rel, mimeType, data });
         files.push({ path: rel, bytes, inlined: true });
+        links.push(link);
+        spent += data.length;
         continue;
       } catch {
         files.push({ path: rel, bytes, inlined: false });
+        links.push(link);
         continue;
       }
     }
 
-    // Too big to inline as-is: show a downscaled preview rather than a bare path.
-    const preview = await makePreview(abs, config.maxInlineImageBytes);
+    const preview = await makePreview(abs, remaining);
     if (preview) {
       images.push({ path: rel, mimeType: preview.mimeType, data: preview.data, note: preview.note });
       files.push({ path: rel, bytes, inlined: true, note: preview.note });
+      spent += preview.data.length;
     } else {
-      files.push({ path: rel, bytes, inlined: false, note: "too large to inline" });
+      files.push({ path: rel, bytes, inlined: false, note: "could not be shrunk to fit" });
     }
+    links.push(link);
   }
 
-  return { files, images, truncated };
+  return { files, images, links, truncated };
 }
 
 export interface ReadArtifactResult {

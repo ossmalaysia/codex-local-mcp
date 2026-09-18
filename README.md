@@ -128,8 +128,14 @@ A few decisions worth knowing about:
   before and after each run, so whatever Codex does, new files are detected. No output parsing.
 - **The prompt travels on stdin** (`codex exec ... -`), so prompt text is never shell-quoted
   and cannot break out into the command line.
-- **Oversized images become previews.** A file over the inline budget is re-encoded smaller
-  until it fits, so the model still sees it. The original on disk is never modified.
+- **Budgets are counted in base64 characters, not file bytes.** Encoding inflates data by 4/3,
+  so a budget expressed in file bytes overshoots what the client actually receives by a third.
+  Images are downscaled until their *encoded* form fits, and a per-response budget caps all of
+  them together. Originals on disk are never modified.
+- **Full-resolution files are linked, not embedded.** Every reported file also comes back as an
+  MCP `resource_link`. The server declares the `resources` capability and serves workspace
+  files through `resources/read`, so a client can fetch the original on demand instead of
+  having megabytes pushed into every response. Reads outside the workspace root are refused.
 - **Generated images open in the OS viewer**, since clients don't render tool-result images.
 - **Timeouts kill the whole process tree**, so a stuck build leaves no orphans.
 

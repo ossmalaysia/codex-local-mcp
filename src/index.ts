@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import path from "node:path";
 import { z } from "zod";
@@ -10,7 +10,14 @@ import { executeTask, imagePromptTemplate, type TaskResult } from "./task.js";
 
 type Content =
   | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
+  | { type: "image"; data: string; mimeType: string; annotations?: Record<string, unknown> }
+  | {
+      type: "resource_link";
+      uri: string;
+      name: string;
+      mimeType?: string;
+      description?: string;
+    };
 
 function errorResult(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
@@ -49,7 +56,24 @@ function formatTask(result: TaskResult) {
       type: "text",
       text: image.note ? `Image: ${image.path} (${image.note})` : `Image: ${image.path}`,
     });
-    content.push({ type: "image", data: image.data, mimeType: image.mimeType });
+    content.push({
+      type: "image",
+      data: image.data,
+      mimeType: image.mimeType,
+      annotations: { audience: ["user", "assistant"], priority: 0.9 },
+    });
+  }
+
+  // Full-resolution files are referenced, not embedded. A client that supports
+  // resource links can fetch them on demand via resources/read.
+  for (const link of artifacts.links) {
+    content.push({
+      type: "resource_link",
+      uri: link.uri,
+      name: link.name,
+      mimeType: link.mimeType,
+      description: link.description,
+    });
   }
 
   return { content, isError: result.timedOut || (result.exitCode ?? 0) !== 0 };
@@ -190,6 +214,33 @@ server.registerTool(
     } catch (err) {
       return errorResult(err);
     }
+  },
+);
+
+/**
+ * Serve workspace files as MCP resources so the resource_link blocks returned
+ * by the tools can actually be fetched, instead of the caller needing the file
+ * pasted into the response. Reads are confined to the workspace root by
+ * readArtifact, exactly like codex_read_artifact.
+ */
+server.registerResource(
+  "workspace-file",
+  new ResourceTemplate("file:///{+path}", { list: undefined }),
+  {
+    title: "Codex workspace file",
+    description:
+      "A file produced by Codex inside the workspace root. Reads outside the root are refused.",
+  },
+  async (uri) => {
+    const target = decodeURIComponent(uri.pathname.replace(/^\//, ""));
+    const file = await readArtifact(target, 50_000_000);
+    return {
+      contents: [
+        file.base64 && file.mimeType
+          ? { uri: uri.href, mimeType: file.mimeType, blob: file.base64 }
+          : { uri: uri.href, mimeType: "text/plain", text: file.text ?? "" },
+      ],
+    };
   },
 );
 
