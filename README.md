@@ -1,5 +1,8 @@
 # codex-local-mcp
 
+[![CI](https://github.com/ossmalaysia/codex-local-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ossmalaysia/codex-local-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 An MCP server that lets any LLM drive your **local Codex CLI**.
 
 The calling model sends a task in plain English. Codex writes and runs code inside an
@@ -137,7 +140,11 @@ npm test          # 11 tests against a fake Codex - no CLI or API key needed
 npm run build
 ```
 
-See [CLAUDE.md](CLAUDE.md) for architecture and the invariants to preserve.
+See [CLAUDE.md](CLAUDE.md) for architecture and the invariants to preserve, and
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+CI runs the build, the test suite and `npm audit` on Ubuntu, Windows and macOS against
+Node 20 and 22, plus weekly CodeQL analysis.
 
 ## Security
 
