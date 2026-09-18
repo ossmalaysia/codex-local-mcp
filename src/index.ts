@@ -4,9 +4,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import path from "node:path";
 import { z } from "zod";
 import { config } from "./config.js";
-import { readArtifact, imageMimeType } from "./artifacts.js";
+import { readArtifact, imageMimeType, uriToPath } from "./artifacts.js";
 import { openInViewer } from "./open.js";
-import { executeTask, imagePromptTemplate, type TaskResult } from "./task.js";
+import { executeTask, imagePromptTemplate, taskFailed, type TaskResult } from "./task.js";
 
 type Content =
   | { type: "text"; text: string }
@@ -28,7 +28,9 @@ function formatTask(result: TaskResult) {
   const { artifacts } = result;
   const header = [
     `workspace: ${result.workspace}`,
-    `exit code: ${result.exitCode ?? "n/a"}${result.timedOut ? " (TIMED OUT - process killed)" : ""}`,
+    `exit code: ${result.exitCode ?? "n/a"}${result.signal ? ` (killed by ${result.signal})` : ""}${
+      result.timedOut ? " (TIMED OUT - process killed)" : ""
+    }`,
     `duration: ${(result.durationMs / 1000).toFixed(1)}s`,
   ].join("\n");
 
@@ -76,7 +78,7 @@ function formatTask(result: TaskResult) {
     });
   }
 
-  return { content, isError: result.timedOut || (result.exitCode ?? 0) !== 0 };
+  return { content, isError: taskFailed(result) };
 }
 
 const server = new McpServer({ name: "codex-local-mcp", version: "0.1.0" });
@@ -165,16 +167,21 @@ server.registerTool(
       const response = formatTask(result);
       if (args.open !== false) {
         const opened: string[] = [];
+        const failures: string[] = [];
         for (const file of result.artifacts.files) {
           if (!imageMimeType(file.path)) continue;
-          const failure = openInViewer(path.join(result.workspace, file.path));
-          if (!failure) opened.push(file.path);
+          const failure = await openInViewer(path.join(result.workspace, file.path));
+          if (failure) failures.push(failure);
+          else opened.push(file.path);
         }
         if (opened.length) {
           response.content.push({
             type: "text",
             text: `Opened in the default image viewer: ${opened.join(", ")}`,
           });
+        }
+        if (failures.length) {
+          response.content.push({ type: "text", text: failures[0] });
         }
       }
       return response;
@@ -205,8 +212,13 @@ server.registerTool(
       const content: Content[] = [
         { type: "text", text: `${file.absPath} (${file.bytes} bytes)` },
       ];
-      if (file.base64 && file.mimeType) {
+      if (file.base64 && file.mimeType?.startsWith("image/")) {
         content.push({ type: "image", data: file.base64, mimeType: file.mimeType });
+      } else if (file.base64) {
+        content.push({
+          type: "text",
+          text: `Binary file (${file.mimeType}); fetch it via its resource link to get the bytes.`,
+        });
       } else {
         content.push({ type: "text", text: file.text ?? "" });
       }
@@ -232,7 +244,10 @@ server.registerResource(
       "A file produced by Codex inside the workspace root. Reads outside the root are refused.",
   },
   async (uri) => {
-    const target = decodeURIComponent(uri.pathname.replace(/^\//, ""));
+    // fileURLToPath handles drive letters, POSIX roots and percent-encoding.
+    // Hand-stripping the leading slash turns an absolute POSIX path into a
+    // relative one, which then resolves under the root twice over.
+    const target = uriToPath(uri.href);
     const file = await readArtifact(target, 50_000_000);
     return {
       contents: [
