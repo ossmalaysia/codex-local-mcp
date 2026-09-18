@@ -51,6 +51,15 @@ in `SECURITY.md`.
   response than one far over it. There is a per-image budget and a per-response total.
 - **Anything not inlined is still reachable**, via a `resource_link` plus `resources/read`,
   and carries a note explaining why it was not inlined. Nothing is dropped silently.
+- **Confinement is checked against resolved paths, not lexical ones.** `assertInsideRoot()`
+  uses `realpath`, because a symlink or Windows junction inside the root passes a lexical
+  check and still points outside.
+- **Never let a relative entry onto the child's PATH, and never run the CLI with a task
+  workspace as the working directory.** Windows resolves executables against the working
+  directory, and Codex can write to its workspace, so either mistake lets a dropped
+  `codex.cmd` run outside the sandbox. `CODEX_BIN` is resolved absolutely at startup.
+- **Every spawned helper needs an `error` listener.** `try/catch` does not catch a child
+  process's asynchronous launch failure, and an unhandled one terminates the server.
 - **Resource reads honour the same root confinement as the tools.** `resources/read` goes
   through `readArtifact`, so a path outside `CODEX_MCP_ROOT` is refused.
 

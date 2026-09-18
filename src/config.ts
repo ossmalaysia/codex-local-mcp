@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,9 +9,42 @@ function num(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/**
+ * Resolve the Codex executable to an absolute path once, at startup.
+ *
+ * A bare command name is dangerous: it is looked up at spawn time, and on
+ * Windows the lookup includes the child's working directory, which is a
+ * workspace Codex itself can write to. A previous run could drop a `codex.cmd`
+ * there and the next run would execute it outside any sandbox. Relative PATH
+ * entries are skipped for the same reason.
+ */
+function resolveCodexBin(raw: string): string {
+  if (path.isAbsolute(raw)) return raw;
+
+  const exts =
+    process.platform === "win32"
+      ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+      : [""];
+
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    if (!dir || !path.isAbsolute(dir)) continue;
+    for (const ext of exts) {
+      const candidate = path.join(dir, raw + ext);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // Keep looking.
+      }
+    }
+  }
+  // Not found. Return the bare name so the launch fails with a clear message
+  // rather than silently resolving against an untrusted directory later.
+  return raw;
+}
+
 export const config = {
-  /** Codex executable. Override if it is not on PATH. */
-  codexBin: process.env.CODEX_BIN || "codex",
+  /** Absolute path to the Codex executable; see resolveCodexBin. */
+  codexBin: resolveCodexBin(process.env.CODEX_BIN || "codex"),
   /** Every workspace lives under this root; callers cannot escape it. */
   root: path.resolve(
     process.env.CODEX_MCP_ROOT || path.join(os.homedir(), ".codex-mcp", "workspaces"),
