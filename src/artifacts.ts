@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { config } from "./config.js";
@@ -29,6 +31,55 @@ export function imageMimeType(filePath: string): string | undefined {
 export function isTextFile(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
   return ext === "" || TEXT_EXT.has(ext);
+}
+
+export class ConfinementError extends Error {}
+
+export interface ConfinedFile {
+  handle: FileHandle;
+  size: number;
+  real: string;
+}
+
+/**
+ * Open a workspace file exactly once and hand back the HANDLE.
+ *
+ * Checking a path and then opening that path again is a race: between the two,
+ * the name can be repointed at something outside the root. So the final
+ * component is opened without following links where the platform supports it,
+ * and the opened file's identity is compared with what was checked. All reading
+ * then happens through this handle, never by re-opening the path.
+ *
+ * The caller owns the handle and must close it.
+ */
+export async function openConfined(abs: string): Promise<ConfinedFile> {
+  const real = await assertInsideRoot(abs);
+
+  // Open FIRST, then verify. Checking a name and then opening that name is a
+  // race: the name can be repointed in between. Opening first means the handle
+  // is pinned to one file, and every check below describes that file.
+  // O_NOFOLLOW does not exist on Windows; the identity comparison still runs.
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+  const handle = await fs.open(real, flags);
+
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile()) {
+      throw new ConfinementError(`refusing "${abs}": not a regular file`);
+    }
+
+    // Confirm the name still refers to the file that was opened. A mismatch
+    // means it was swapped, and the handle is the only thing we trust.
+    const named = await fs.lstat(real, { bigint: true });
+    if (named.ino !== opened.ino || named.dev !== opened.dev) {
+      throw new ConfinementError(`refusing "${abs}": it was replaced while being opened`);
+    }
+
+    return { handle, size: Number(opened.size), real };
+  } catch (err) {
+    await handle.close();
+    throw err;
+  }
 }
 
 export interface FileReport {
@@ -94,65 +145,66 @@ export async function collectArtifacts(
   for (const rel of selected) {
     const abs = path.join(workspace, rel);
 
-    let bytes = 0;
+    let file: ConfinedFile;
     try {
-      await assertInsideRoot(abs);
-      bytes = (await fs.stat(abs)).size;
+      file = await openConfined(abs);
     } catch {
-      continue; // Vanished, or a link pointing outside the root.
+      continue; // Vanished, replaced, or resolving outside the root.
     }
 
-    const mimeType = imageMimeType(rel);
-    const link: ResourceLink = {
-      uri: fileUri(abs),
-      name: rel,
-      mimeType,
-      description: `${bytes} bytes, produced in this workspace`,
-    };
+    try {
+      const bytes = file.size;
+      const mimeType = imageMimeType(rel);
+      const link: ResourceLink = {
+        uri: fileUri(file.real),
+        name: rel,
+        mimeType,
+        description: `${bytes} bytes, produced in this workspace`,
+      };
 
-    if (!mimeType || bytes === 0) {
-      files.push({ path: rel, bytes, inlined: false });
-      links.push(link);
-      continue;
-    }
-
-    const remaining = Math.min(config.maxInlineImageB64, config.maxResponseB64 - spent);
-    if (remaining <= 0) {
-      files.push({ path: rel, bytes, inlined: false, note: "response image budget spent" });
-      links.push(link);
-      continue;
-    }
-
-    // Send the original only when its ENCODED size fits. The stat above is a
-    // cheap pre-filter; the authoritative check is on the bytes actually read,
-    // because the file can change in between.
-    if (b64Length(bytes) <= remaining) {
-      try {
-        const data = (await fs.readFile(abs)).toString("base64");
-        if (data.length <= remaining) {
-          images.push({ path: rel, mimeType, data });
-          files.push({ path: rel, bytes, inlined: true });
-          links.push(link);
-          spent += data.length;
-          continue;
-        }
-        // It grew after the stat; fall through to the preview path.
-      } catch {
+      if (!mimeType || bytes === 0) {
         files.push({ path: rel, bytes, inlined: false });
         links.push(link);
         continue;
       }
-    }
 
-    const preview = await makePreview(abs, remaining);
-    if (preview) {
-      images.push({ path: rel, mimeType: preview.mimeType, data: preview.data, note: preview.note });
-      files.push({ path: rel, bytes, inlined: true, note: preview.note });
-      spent += preview.data.length;
-    } else {
-      files.push({ path: rel, bytes, inlined: false, note: "could not be shrunk to fit" });
+      const remaining = Math.min(config.maxInlineImageB64, config.maxResponseB64 - spent);
+      if (remaining <= 0) {
+        files.push({ path: rel, bytes, inlined: false, note: "response image budget spent" });
+        links.push(link);
+        continue;
+      }
+
+      // One read, from the handle that was already validated. The encoded
+      // length of those exact bytes is what the budget is checked against.
+      const data = await file.handle.readFile();
+      const encoded = data.toString("base64");
+
+      if (encoded.length <= remaining) {
+        images.push({ path: rel, mimeType, data: encoded });
+        files.push({ path: rel, bytes, inlined: true });
+        links.push(link);
+        spent += encoded.length;
+        continue;
+      }
+
+      const preview = await makePreview(data, remaining);
+      if (preview) {
+        images.push({
+          path: rel,
+          mimeType: preview.mimeType,
+          data: preview.data,
+          note: preview.note,
+        });
+        files.push({ path: rel, bytes, inlined: true, note: preview.note });
+        spent += preview.data.length;
+      } else {
+        files.push({ path: rel, bytes, inlined: false, note: "could not be shrunk to fit" });
+      }
+      links.push(link);
+    } finally {
+      await file.handle.close();
     }
-    links.push(link);
   }
 
   return { files, images, links, truncated };
@@ -173,35 +225,37 @@ export interface ReadArtifactResult {
  */
 export async function readArtifact(target: string, maxBytes: number): Promise<ReadArtifactResult> {
   const abs = path.isAbsolute(target) ? path.resolve(target) : path.resolve(config.root, target);
-  const real = await assertInsideRoot(abs);
+  const file = await openConfined(abs);
 
-  const handle = await fs.open(real, "r");
   try {
-    const stat = await handle.stat();
-    if (stat.size > maxBytes) {
+    if (file.size > maxBytes) {
       throw new Error(
-        `"${target}" is ${stat.size} bytes, over the ${maxBytes} byte limit. Raise max_bytes or read it another way.`,
+        `"${target}" is ${file.size} bytes, over the ${maxBytes} byte limit. Raise max_bytes or read it another way.`,
       );
     }
-    // Read at most maxBytes + 1 so growth between stat and read is caught.
-    const buf = Buffer.alloc(Math.min(stat.size, maxBytes) + 1);
-    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    // Read one byte past the limit so growth after the size check is caught.
+    const buf = Buffer.alloc(Math.min(file.size, maxBytes) + 1);
+    const { bytesRead } = await file.handle.read(buf, 0, buf.length, 0);
     if (bytesRead > maxBytes) {
       throw new Error(`"${target}" grew past the ${maxBytes} byte limit while being read.`);
     }
     const data = buf.subarray(0, bytesRead);
 
-    const mimeType = imageMimeType(real);
-    if (mimeType) return { absPath: real, bytes: bytesRead, mimeType, base64: data.toString("base64") };
-    if (isTextFile(real)) return { absPath: real, bytes: bytesRead, text: data.toString("utf8") };
+    const mimeType = imageMimeType(file.real);
+    if (mimeType) {
+      return { absPath: file.real, bytes: bytesRead, mimeType, base64: data.toString("base64") };
+    }
+    if (isTextFile(file.real)) {
+      return { absPath: file.real, bytes: bytesRead, text: data.toString("utf8") };
+    }
     // Unknown binary: base64 rather than lossy UTF-8 decoding.
     return {
-      absPath: real,
+      absPath: file.real,
       bytes: bytesRead,
       mimeType: "application/octet-stream",
       base64: data.toString("base64"),
     };
   } finally {
-    await handle.close();
+    await file.handle.close();
   }
 }

@@ -19,6 +19,7 @@ vulnerability; please report it.
 |---|---|
 | Codex cannot read or write outside the workspace root | `codex exec --sandbox workspace-write`, with `--cd` inside `CODEX_MCP_ROOT` |
 | A caller cannot escape the workspace root via the `workspace` argument | `resolveWorkspace()` refuses absolute paths and any path resolving outside the root |
+| A file cannot be swapped between the check and the read | `openConfined()` opens once with `O_NOFOLLOW` where supported and compares the opened file's device and inode with what was checked; all reads use that handle |
 | Symlinks and Windows junctions cannot be used to escape the root | `assertInsideRoot()` resolves links with `realpath` and checks the real target, on workspace creation, artifact collection and every read |
 | A caller cannot read arbitrary files via `codex_read_artifact` or `resources/read` | Both go through `readArtifact()`, which refuses any path resolving outside the root |
 | The Codex executable cannot be substituted by workspace contents | `CODEX_BIN` is resolved to an absolute path at startup, relative entries are stripped from the child `PATH`, and the child's working directory is the root rather than the task workspace |

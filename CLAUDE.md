@@ -51,6 +51,10 @@ in `SECURITY.md`.
   response than one far over it. There is a per-image budget and a per-response total.
 - **Anything not inlined is still reachable**, via a `resource_link` plus `resources/read`,
   and carries a note explaining why it was not inlined. Nothing is dropped silently.
+- **Never check a path and then re-open that path.** Use `openConfined()`, which validates,
+  opens once without following links, verifies the opened file's identity, and hands back a
+  handle. Reading by name after checking by name is a race: the name can be repointed in
+  between. This applies to previews too, which take bytes rather than a path.
 - **Confinement is checked against resolved paths, not lexical ones.** `assertInsideRoot()`
   uses `realpath`, because a symlink or Windows junction inside the root passes a lexical
   check and still points outside.
