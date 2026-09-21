@@ -55,20 +55,27 @@ export interface ConfinedFile {
 export async function openConfined(abs: string): Promise<ConfinedFile> {
   const real = await assertInsideRoot(abs);
 
-  const before = await fs.lstat(real, { bigint: true });
-  if (!before.isFile()) {
-    throw new ConfinementError(`refusing "${abs}": not a regular file`);
-  }
-
-  // O_NOFOLLOW does not exist on Windows; the identity check below still runs.
+  // Open FIRST, then verify. Checking a name and then opening that name is a
+  // race: the name can be repointed in between. Opening first means the handle
+  // is pinned to one file, and every check below describes that file.
+  // O_NOFOLLOW does not exist on Windows; the identity comparison still runs.
   const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
   const handle = await fs.open(real, flags);
+
   try {
-    const after = await handle.stat({ bigint: true });
-    if (after.ino !== before.ino || after.dev !== before.dev) {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile()) {
+      throw new ConfinementError(`refusing "${abs}": not a regular file`);
+    }
+
+    // Confirm the name still refers to the file that was opened. A mismatch
+    // means it was swapped, and the handle is the only thing we trust.
+    const named = await fs.lstat(real, { bigint: true });
+    if (named.ino !== opened.ino || named.dev !== opened.dev) {
       throw new ConfinementError(`refusing "${abs}": it was replaced while being opened`);
     }
-    return { handle, size: Number(after.size), real };
+
+    return { handle, size: Number(opened.size), real };
   } catch (err) {
     await handle.close();
     throw err;
