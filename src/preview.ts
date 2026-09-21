@@ -22,18 +22,18 @@ export interface Preview {
 }
 
 /**
- * Shrink an image until its BASE64 form fits `maxB64`. The original file on
- * disk is never touched - this only produces something small enough for the
- * caller to actually receive, which a bare file path does not provide.
+ * Shrink an image until its BASE64 form fits `maxB64`. Takes the bytes that
+ * were already read through a validated handle, rather than a path, so the file
+ * is never re-opened by name. The original on disk is never touched.
  *
  * Note this is not an optional nicety: gpt-image-2 requires at least 655,360
  * pixels per image, so a generated PNG is essentially always too large to
  * inline untouched.
  */
-export async function makePreview(absPath: string, maxB64: number): Promise<Preview | undefined> {
+export async function makePreview(source: Buffer, maxB64: number): Promise<Preview | undefined> {
   for (const { width, quality } of ATTEMPTS) {
     try {
-      const buf = await sharp(absPath)
+      const buf = await sharp(source)
         .resize({ width, withoutEnlargement: true })
         .jpeg({ quality })
         .toBuffer();

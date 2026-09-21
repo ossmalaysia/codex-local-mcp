@@ -90,6 +90,48 @@ describe("symlink confinement", () => {
   });
 });
 
+describe("reads go through a validated handle, not a re-opened path", () => {
+  it("refuses a symlinked file rather than following it", async () => {
+    const { openConfined } = await import("../src/artifacts.js");
+    const dir = path.join(root, "race");
+    fs.mkdirSync(dir, { recursive: true });
+    const link = path.join(dir, "innocent.txt");
+    try {
+      fs.symlinkSync(path.join(outside, "secret.txt"), link, "file");
+    } catch {
+      return; // Creating file symlinks needs privileges here; nothing to assert.
+    }
+
+    // Either confinement rejects the resolved target, or O_NOFOLLOW refuses the
+    // link itself. Both are correct; silently reading the target is not.
+    await expect(openConfined(link)).rejects.toThrow();
+  });
+
+  it("refuses a directory", async () => {
+    const { openConfined } = await import("../src/artifacts.js");
+    const dir = path.join(root, "adir");
+    fs.mkdirSync(dir, { recursive: true });
+
+    await expect(openConfined(dir)).rejects.toThrow(/not a regular file/);
+  });
+
+  it("returns a usable handle for an ordinary file and reports its size", async () => {
+    const { openConfined } = await import("../src/artifacts.js");
+    const dir = path.join(root, "plain");
+    fs.mkdirSync(dir, { recursive: true });
+    const abs = path.join(dir, "ok.txt");
+    fs.writeFileSync(abs, "hello handle");
+
+    const file = await openConfined(abs);
+    try {
+      expect(file.size).toBe(12);
+      expect((await file.handle.readFile()).toString()).toBe("hello handle");
+    } finally {
+      await file.handle.close();
+    }
+  });
+});
+
 describe("file URIs round-trip", () => {
   it("survives spaces and reserved characters", () => {
     const dir = path.join(root, "uri");
