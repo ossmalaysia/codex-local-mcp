@@ -1,12 +1,19 @@
 import sharp from "sharp";
 
-/** Progressively smaller/lossier attempts until one fits the inline budget. */
+/** Progressively smaller and lossier attempts until one fits the budget. */
 const ATTEMPTS: Array<{ width: number; quality: number }> = [
   { width: 1280, quality: 80 },
   { width: 1024, quality: 75 },
+  { width: 900, quality: 70 },
   { width: 768, quality: 65 },
-  { width: 512, quality: 55 },
+  { width: 640, quality: 55 },
+  { width: 512, quality: 45 },
 ];
+
+/** base64 length for a buffer of n bytes, without doing the encoding. */
+export function b64Length(bytes: number): number {
+  return Math.ceil(bytes / 3) * 4;
+}
 
 export interface Preview {
   data: string;
@@ -15,26 +22,31 @@ export interface Preview {
 }
 
 /**
- * Shrink an image that is too large to inline. The original file on disk is
- * never touched - this only produces something small enough for the caller to
- * actually see, which a bare file path does not.
+ * Shrink an image until its BASE64 form fits `maxB64`. The original file on
+ * disk is never touched - this only produces something small enough for the
+ * caller to actually receive, which a bare file path does not provide.
+ *
+ * Note this is not an optional nicety: gpt-image-2 requires at least 655,360
+ * pixels per image, so a generated PNG is essentially always too large to
+ * inline untouched.
  */
-export async function makePreview(absPath: string, maxBytes: number): Promise<Preview | undefined> {
+export async function makePreview(absPath: string, maxB64: number): Promise<Preview | undefined> {
   for (const { width, quality } of ATTEMPTS) {
     try {
       const buf = await sharp(absPath)
         .resize({ width, withoutEnlargement: true })
         .jpeg({ quality })
         .toBuffer();
-      if (buf.length <= maxBytes) {
+      const encoded = buf.toString("base64");
+      if (encoded.length <= maxB64) {
         return {
-          data: buf.toString("base64"),
+          data: encoded,
           mimeType: "image/jpeg",
-          note: `preview: ${width}px wide, q${quality}, ${buf.length} bytes (full-resolution file is on disk)`,
+          note: `preview ${width}px q${quality}, ${encoded.length} b64 chars (full resolution on disk)`,
         };
       }
     } catch {
-      return undefined; // Not a decodable image; caller falls back to path-only.
+      return undefined; // Not a decodable image; caller falls back to a link.
     }
   }
   return undefined;

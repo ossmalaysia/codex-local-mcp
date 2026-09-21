@@ -13,6 +13,7 @@ export interface RunResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
+  signal: NodeJS.Signals | null;
   timedOut: boolean;
   durationMs: number;
   command: string;
@@ -24,6 +25,19 @@ export class CodexNotFoundError extends Error {
       `Could not run "${bin}". Install the Codex CLI (npm i -g @openai/codex), run "codex login", ` +
         `or set CODEX_BIN to its full path.`,
     );
+  }
+}
+
+/**
+ * Values that reach a Windows command line must not be able to smuggle in
+ * environment expansion or quoting tricks. Model names are the only free-form
+ * argument we pass, so they are restricted to characters real model ids use.
+ */
+const SAFE_MODEL = /^[A-Za-z0-9._:/-]{1,128}$/;
+
+export class UnsafeArgumentError extends Error {
+  constructor(value: string) {
+    super(`Refusing to pass model "${value}": only letters, digits and . _ : / - are allowed.`);
   }
 }
 
@@ -42,111 +56,181 @@ function buildArgs(opts: RunOptions): string[] {
     args.push("-c", "sandbox_workspace_write.network_access=true");
   }
   const model = opts.model || config.model;
-  if (model) args.push("--model", model);
+  if (model) {
+    if (!SAFE_MODEL.test(model)) throw new UnsafeArgumentError(model);
+    args.push("--model", model);
+  }
   // Trailing "-" makes codex read the prompt from stdin, so no shell quoting of
   // untrusted prompt text is ever needed.
   args.push("-");
   return args;
 }
 
-/** Windows spawn cannot kill a process tree, and codex spawns node/python children. */
+function systemDir(): string {
+  return path.join(process.env.SystemRoot || "C:\\Windows", "System32");
+}
+
+/**
+ * Windows spawn cannot kill a process tree, and codex spawns node/python
+ * children. Both the launch failure and the exit status are handled here: an
+ * unhandled child "error" event would terminate this server.
+ */
 function killTree(pid: number): void {
   if (process.platform === "win32") {
-    spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
-  } else {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
+    const killer = spawn(
+      path.join(systemDir(), "taskkill.exe"),
+      ["/pid", String(pid), "/T", "/F"],
+      { stdio: "ignore", windowsHide: true },
+    );
+    killer.on("error", (err) => {
+      console.error("codex-local-mcp: could not run taskkill:", err);
       try {
         process.kill(pid, "SIGKILL");
       } catch {
         // Already gone.
       }
+    });
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already gone.
     }
   }
 }
 
 /**
- * With shell:true, Node hands the command line to cmd.exe verbatim, so any path
- * containing a space (C:\Users\First Last\...) silently splits into two args.
- * Quote everything ourselves. The prompt travels on stdin and is never quoted.
+ * With verbatim arguments, Windows hands the command line to cmd.exe as written,
+ * so any path containing a space would split into two arguments. Quote them all.
+ * The prompt travels on stdin and is never quoted.
  */
-function quoteForShell(value: string): string {
+export function quoteForShell(value: string): string {
   if (value !== "" && !/[\s"^&|<>()%!]/.test(value)) return value;
   return `"${value.replace(/"/g, '""')}"`;
 }
 
 /**
- * MCP clients launch servers with a minimal environment. `shell: true` would
- * leave Node to find cmd.exe through that environment and fail with ENOENT, so
- * resolve the interpreter absolutely instead.
+ * The child's PATH must be usable (codex.cmd re-invokes node) without ever
+ * containing a relative entry: "." would resolve against the working directory,
+ * and a workspace is something Codex itself can write to.
  */
-function windowsShell(): string {
-  return (
-    process.env.ComSpec ||
-    path.join(process.env.SystemRoot || "C:\Windows", "System32", "cmd.exe")
-  );
-}
-
-/**
- * codex.cmd re-invokes node, so the child needs a PATH that can find it even
- * when the launching client supplied none.
- */
-function childEnv(): NodeJS.ProcessEnv {
+export function childEnv(): NodeJS.ProcessEnv {
   const extra = [path.dirname(config.codexBin), path.dirname(process.execPath)];
-  if (process.platform === "win32") {
-    extra.push(path.join(process.env.SystemRoot || "C:\Windows", "System32"));
-  }
+  if (process.platform === "win32") extra.push(systemDir());
+
   const current = process.env.PATH || process.env.Path || "";
   const merged = [...extra, ...current.split(path.delimiter)]
-    .filter((entry, index, all) => entry && all.indexOf(entry) === index)
+    .filter((entry) => entry && path.isAbsolute(entry))
+    .filter((entry, index, all) => all.indexOf(entry) === index)
     .join(path.delimiter);
   return { ...process.env, PATH: merged, Path: merged };
 }
 
+/** Keeps the head and tail of a stream without ever holding all of it in memory. */
+export class BoundedBuffer {
+  private head = "";
+  private tail = "";
+  private dropped = 0;
+
+  constructor(private readonly max: number) {}
+
+  push(chunk: string): void {
+    const headRoom = Math.floor(this.max / 2) - this.head.length;
+    if (headRoom > 0) {
+      this.head += chunk.slice(0, headRoom);
+      chunk = chunk.slice(headRoom);
+      if (!chunk) return;
+    }
+    this.tail += chunk;
+    const tailMax = Math.ceil(this.max / 2);
+    if (this.tail.length > tailMax) {
+      this.dropped += this.tail.length - tailMax;
+      this.tail = this.tail.slice(-tailMax);
+    }
+  }
+
+  toString(): string {
+    if (!this.dropped) return this.head + this.tail;
+    return `${this.head}\n\n...[${this.dropped} characters omitted]...\n\n${this.tail}`;
+  }
+}
+
 export function runCodex(opts: RunOptions): Promise<RunResult> {
-  const rawArgs = buildArgs(opts);
+  // Argument validation must surface as a rejection, not a synchronous throw:
+  // callers await this, and a sync throw skips their error handling path.
+  let rawArgs: string[];
+  try {
+    rawArgs = buildArgs(opts);
+  } catch (err) {
+    return Promise.reject(err);
+  }
+
   const isWindows = process.platform === "win32";
   const started = Date.now();
 
-  const file = isWindows ? windowsShell() : config.codexBin;
+  const file = isWindows ? process.env.ComSpec || path.join(systemDir(), "cmd.exe") : config.codexBin;
   const commandLine = [config.codexBin, ...rawArgs].map(quoteForShell).join(" ");
   // /d skips AutoRun scripts, /c runs and exits. The outer quotes matter: with
   // /s cmd strips the first and last quote of the line, so an unwrapped line
-  // whose first arg is quoted loses the closing quote of a *different* argument.
+  // whose first argument is quoted loses the closing quote of a *different* one.
   const args = isWindows ? ["/d", "/s", "/c", `"${commandLine}"`] : rawArgs;
   const command = isWindows ? commandLine : `${config.codexBin} ${rawArgs.join(" ")}`;
 
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, {
-      cwd: opts.cwd,
+      // Deliberately NOT the task workspace: on Windows the executable lookup
+      // includes the working directory, and Codex can write to its workspace.
+      // Codex gets its own working directory from --cd instead.
+      cwd: config.root,
       windowsVerbatimArguments: isWindows,
       detached: !isWindows,
       windowsHide: true,
       env: childEnv(),
     });
 
-    let stdout = "";
-    let stderr = "";
+    const stdout = new BoundedBuffer(config.maxOutputChars);
+    const stderr = new BoundedBuffer(config.maxOutputChars);
     let timedOut = false;
     let settled = false;
+    let reaper: NodeJS.Timeout | undefined;
+
+    const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (reaper) clearTimeout(reaper);
+      resolve({
+        stdout: stdout.toString(),
+        stderr: stderr.toString(),
+        exitCode,
+        signal,
+        timedOut,
+        durationMs: Date.now() - started,
+        command,
+      });
+    };
 
     const timer = setTimeout(() => {
       timedOut = true;
       if (child.pid) killTree(child.pid);
+      // A detached grandchild can hold the pipes open, so "close" may never
+      // arrive. Settle anyway shortly after the kill rather than hanging.
+      reaper = setTimeout(() => finish(null, "SIGKILL"), 5_000);
+      reaper.unref();
     }, opts.timeoutSec * 1000);
 
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk.toString("utf8")));
 
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (reaper) clearTimeout(reaper);
       if (err.code === "ENOENT") {
         reject(new CodexNotFoundError(config.codexBin));
         return;
@@ -155,19 +239,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
       reject(err);
     });
 
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({
-        stdout,
-        stderr,
-        exitCode: code,
-        timedOut,
-        durationMs: Date.now() - started,
-        command,
-      });
-    });
+    child.on("close", (code, signal) => finish(code, signal));
 
     child.stdin.on("error", () => {
       // Codex exited before reading the prompt; the close handler reports it.

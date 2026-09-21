@@ -21,11 +21,14 @@ export class WorkspaceError extends Error {}
  * Turn a caller-supplied workspace name into an absolute path under the root.
  * Anything that would escape the root is refused rather than clamped, so a
  * caller never silently gets a different directory than it asked for.
+ *
+ * This is the LEXICAL check only. It cannot see symlinks, so every path that is
+ * actually opened must also pass assertInsideRoot().
  */
 export function resolveWorkspace(name?: string): string {
   const slug = name?.trim()
     ? name.trim()
-    : `ws-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    : `ws-${new Date().toISOString().replace(/[:.]/g, "-")}-${Math.random().toString(36).slice(2, 8)}`;
 
   if (path.isAbsolute(slug)) {
     throw new WorkspaceError(
@@ -40,8 +43,57 @@ export function resolveWorkspace(name?: string): string {
   return target;
 }
 
-export async function ensureWorkspace(dir: string): Promise<void> {
+/** The workspace root with every symlink resolved, computed once. */
+let realRootPromise: Promise<string> | undefined;
+async function realRoot(): Promise<string> {
+  if (!realRootPromise) {
+    realRootPromise = fs.mkdir(config.root, { recursive: true }).then(() => fs.realpath(config.root));
+  }
+  return realRootPromise;
+}
+
+/**
+ * Confinement check that survives symlinks and Windows junctions. A lexical
+ * check alone is not enough: `root/ws/link -> /home/user` resolves lexically
+ * inside the root while the filesystem happily follows it outside.
+ *
+ * For a path that does not exist yet, the nearest existing ancestor is checked,
+ * which is what a subsequent mkdir or write would follow.
+ */
+export async function assertInsideRoot(target: string): Promise<string> {
+  const root = await realRoot();
+
+  let current = path.resolve(target);
+  const trailing: string[] = [];
+  for (;;) {
+    try {
+      const real = await fs.realpath(current);
+      const resolved = path.resolve(real, ...trailing);
+      const realWithin = path.resolve(real);
+      if (realWithin !== root && !realWithin.startsWith(root + path.sep)) {
+        throw new WorkspaceError(
+          `refusing "${target}": it resolves to ${resolved}, outside the workspace root`,
+        );
+      }
+      return resolved;
+    } catch (err) {
+      if (err instanceof WorkspaceError) throw err;
+      const parent = path.dirname(current);
+      if (parent === current) {
+        throw new WorkspaceError(`refusing "${target}": no existing ancestor inside the root`);
+      }
+      trailing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+export async function ensureWorkspace(dir: string): Promise<string> {
+  await assertInsideRoot(dir);
   await fs.mkdir(dir, { recursive: true });
+  // Re-check after creation: the path may have been replaced by a link in
+  // between, and this is the handle the run will actually use.
+  return assertInsideRoot(dir);
 }
 
 /** relative path -> "mtimeMs:size" fingerprint. */
