@@ -19,7 +19,11 @@ vulnerability; please report it.
 |---|---|
 | Codex cannot read or write outside the workspace root | `codex exec --sandbox workspace-write`, with `--cd` inside `CODEX_MCP_ROOT` |
 | A caller cannot escape the workspace root via the `workspace` argument | `resolveWorkspace()` refuses absolute paths and any path resolving outside the root |
-| A caller cannot read arbitrary files via `codex_read_artifact` | `readArtifact()` refuses any path outside the root |
+| Symlinks and Windows junctions cannot be used to escape the root | `assertInsideRoot()` resolves links with `realpath` and checks the real target, on workspace creation, artifact collection and every read |
+| A caller cannot read arbitrary files via `codex_read_artifact` or `resources/read` | Both go through `readArtifact()`, which refuses any path resolving outside the root |
+| The Codex executable cannot be substituted by workspace contents | `CODEX_BIN` is resolved to an absolute path at startup, relative entries are stripped from the child `PATH`, and the child's working directory is the root rather than the task workspace |
+| A failed helper process cannot take down the server | `taskkill` and the image viewer both handle the asynchronous `error` event |
+| Runaway output cannot exhaust server memory | Both streams are buffered head-and-tail with a fixed budget while draining |
 | Prompt text cannot break out into the host shell | The prompt is passed to Codex on **stdin**, never as a command-line argument |
 | A hung or runaway Codex run cannot persist | Timeout kills the whole process tree (`taskkill /T` on Windows, process group kill elsewhere) |
 | Tool output cannot exhaust the caller's context | Output is capped; oversized images are downscaled into previews |
