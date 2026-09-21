@@ -51,6 +51,22 @@ optional** — the process spawning, argument quoting and process-tree terminati
 - Elaborate prompt templating. Codex is an agent that already knows how to work; over-scripting
   its prompt has measurably made it take worse paths.
 
+## Workflow changes
+
+The `ossmalaysia` organisation requires GitHub Actions to be **pinned to a full commit SHA**;
+a tag such as `@v4` makes the workflow fail to start. Pin new actions like this, keeping the
+version in a trailing comment:
+
+```yaml
+- uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+```
+
+Resolve a tag to its SHA with:
+
+```bash
+gh api repos/actions/checkout/git/ref/tags/v4 --jq '.object.sha'
+```
+
 ## Reporting bugs
 
 Open an issue with your OS, Node version, Codex CLI version, the relevant part of your client
