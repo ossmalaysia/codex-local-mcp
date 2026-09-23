@@ -69,5 +69,6 @@ have. We aim to acknowledge within 7 days and to agree a disclosure timeline wit
 
 ## Supported versions
 
-This project is pre-1.0. Security fixes land on `main`; there are no backported release
-branches.
+Only the **latest release** receives security fixes. Fixes are released as soon as they
+merge, as a patch release, and are never backported to older versions. The project is pre-1.0,
+so upgrade to the newest tag rather than pinning an old one.

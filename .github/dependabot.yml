@@ -8,8 +8,16 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: development
+    # PR titles become squash-commit titles, which semantic-release reads.
+    # Runtime dependency bumps are "fix" so users receive them in a release,
+    # which matters for security fixes. Dev-only bumps never trigger one.
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "chore(deps-dev)"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "ci(deps)"

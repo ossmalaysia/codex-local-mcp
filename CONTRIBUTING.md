@@ -51,6 +51,45 @@ optional** — the process spawning, argument quoting and process-tree terminati
 - Elaborate prompt templating. Codex is an agent that already knows how to work; over-scripting
   its prompt has measurably made it take worse paths.
 
+## Commit messages and releases
+
+Releases are fully automated with [semantic-release](https://semantic-release.gitbook.io/),
+which reads commit titles to decide the next version. That only works if every commit on
+`main` follows [Conventional Commits](https://www.conventionalcommits.org/).
+
+Pull requests are **squash-merged**, and the squash commit takes the **PR title**. So the one
+thing you must get right is the PR title; the commits inside your branch can say anything. A
+check blocks merging until the title is valid.
+
+```
+<type>(<optional scope>): <description>
+```
+
+| Type | Use it for | Release |
+|---|---|---|
+| `feat` | A new capability | minor, `0.1.0` → `0.2.0` |
+| `fix` | A bug fix, including runtime dependency updates | patch, `0.1.0` → `0.1.1` |
+| `perf` | A performance improvement | patch |
+| `docs`, `test`, `refactor`, `style`, `build`, `ci`, `chore` | Everything else | none |
+| any type with `!`, e.g. `feat!:` | A breaking change | major |
+
+A breaking change can also be declared with a `BREAKING CHANGE:` line in the PR description,
+since the description becomes the squash commit body. Say what breaks and how to migrate.
+
+Examples:
+
+```
+fix(image): reject malformed sizes before running Codex
+feat(image): report the actual dimensions of generated images
+feat(image)!: remove the count parameter
+docs: explain the workspace root in SETUP.md
+```
+
+Releases are git tags (`v1.2.3`) with notes on the
+[Releases page](https://github.com/ossmalaysia/codex-local-mcp/releases). Nothing is committed
+back to `main`, so `package.json` carries the placeholder version `0.0.0-development`; the tag is
+the real version. Do not edit the version by hand.
+
 ## Workflow changes
 
 The `ossmalaysia` organisation requires GitHub Actions to be **pinned to a full commit SHA**;

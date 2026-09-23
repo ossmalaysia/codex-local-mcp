@@ -1,6 +1,6 @@
 {
   "name": "codex-local-mcp",
-  "version": "0.1.0",
+  "version": "0.0.0-development",
   "description": "MCP server that lets any LLM drive the local Codex CLI in a sandboxed workspace.",
   "type": "module",
   "bin": {
@@ -23,6 +23,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.5.1",
+    "conventional-changelog-conventionalcommits": "^10.4.0",
+    "semantic-release": "^25.0.9",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"
   },

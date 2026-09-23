@@ -20,6 +20,14 @@ Test tool behaviour through a real MCP client: `createServer()` connected to
 `InMemoryTransport.createLinkedPair()` (see `test/image-size.test.ts`). That exercises schema
 validation and result formatting, which calling internal functions directly would skip.
 
+## Commits and releases
+
+PR titles must be Conventional Commits (`feat:`, `fix:`, `docs:` ...): PRs are squash-merged
+with the title as the commit, and semantic-release derives the next version from those titles.
+`feat` is a minor release, `fix`/`perf` a patch, `!` or a `BREAKING CHANGE:` footer a major;
+other types release nothing. Releases are tags only, so never hand-edit the `package.json`
+version (`0.0.0-development` is intentional). See CONTRIBUTING.md.
+
 ## Architecture
 
 One job per module. Keep it that way.
