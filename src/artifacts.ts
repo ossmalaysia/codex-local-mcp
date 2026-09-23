@@ -4,7 +4,7 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import { b64Length, makePreview } from "./preview.js";
+import { imageDimensions, makePreview } from "./preview.js";
 import { assertInsideRoot } from "./workspace.js";
 
 const IMAGE_MIME: Record<string, string> = {
@@ -87,6 +87,9 @@ export interface FileReport {
   bytes: number;
   inlined: boolean;
   note?: string;
+  /** Actual pixel dimensions, for images that could be decoded. */
+  width?: number;
+  height?: number;
 }
 
 /** A file the caller can fetch on demand instead of receiving inline. */
@@ -168,21 +171,25 @@ export async function collectArtifacts(
         continue;
       }
 
+      // One read, from the handle that was already validated. Every image is
+      // read, even when the inline budget is spent, so its real dimensions can
+      // always be reported.
+      const data = await file.handle.readFile();
+      const dims = await imageDimensions(data);
+      const report = { path: rel, bytes, width: dims?.width, height: dims?.height };
+
       const remaining = Math.min(config.maxInlineImageB64, config.maxResponseB64 - spent);
       if (remaining <= 0) {
-        files.push({ path: rel, bytes, inlined: false, note: "response image budget spent" });
+        files.push({ ...report, inlined: false, note: "response image budget spent" });
         links.push(link);
         continue;
       }
 
-      // One read, from the handle that was already validated. The encoded
-      // length of those exact bytes is what the budget is checked against.
-      const data = await file.handle.readFile();
+      // The encoded length of those exact bytes is what the budget checks.
       const encoded = data.toString("base64");
-
       if (encoded.length <= remaining) {
         images.push({ path: rel, mimeType, data: encoded });
-        files.push({ path: rel, bytes, inlined: true });
+        files.push({ ...report, inlined: true });
         links.push(link);
         spent += encoded.length;
         continue;
@@ -196,10 +203,10 @@ export async function collectArtifacts(
           data: preview.data,
           note: preview.note,
         });
-        files.push({ path: rel, bytes, inlined: true, note: preview.note });
+        files.push({ ...report, inlined: true, note: preview.note });
         spent += preview.data.length;
       } else {
-        files.push({ path: rel, bytes, inlined: false, note: "could not be shrunk to fit" });
+        files.push({ ...report, inlined: false, note: "could not be shrunk to fit" });
       }
       links.push(link);
     } finally {

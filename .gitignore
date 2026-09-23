@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.log
+
+# Personal agent instructions (tool routing, local preferences) - never published
+CLAUDE.local.md

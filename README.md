@@ -103,6 +103,9 @@ Any MCP client that can launch a stdio server works. Point it at
 Reuse the same `workspace` name across calls to keep working on the same files.
 
 `codex_generate_image` defaults to `quality: "low"` and `size: "1024x1024"` — a fast draft.
+`size` must be `WIDTHxHEIGHT` or `auto`; a malformed value is rejected before Codex runs. The
+size is a request to Codex rather than something the server can enforce, so the result
+reports each image's actual dimensions and flags any that differ from what was asked.
 Raise `quality` to `high` for final assets. `open` defaults to `true` and opens each image in
 your default viewer, because MCP clients deliver tool-result images to the *model's* context
 and do not render them into the chat for you.
@@ -148,7 +151,7 @@ A few decisions worth knowing about:
 ## Development
 
 ```bash
-npm test          # 11 tests against a fake Codex - no CLI or API key needed
+npm test          # runs against a fake Codex - no CLI or API key needed
 npm run build
 ```
 
