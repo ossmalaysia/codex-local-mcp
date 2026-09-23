@@ -96,6 +96,41 @@ export function taskFailed(result: TaskResult): boolean {
   return result.exitCode === null || result.exitCode !== 0;
 }
 
+export class ImageSizeError extends Error {}
+
+export interface ImageSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * Validate the SHAPE of a requested size before spending a Codex run on it.
+ *
+ * Deliberately not enforced: the gpt-image-2 API limits (multiples of 16, a
+ * 655,360-pixel minimum). Those govern Codex's API fallback, not its built-in
+ * image tool, which has produced an exact 800x600 (480,000 pixels). Rejecting
+ * on those rules would refuse sizes that work.
+ */
+export function parseImageSize(size: string): ImageSize | "auto" {
+  const trimmed = size.trim().toLowerCase();
+  if (trimmed === "auto") return "auto";
+
+  const match = /^(\d{1,5})x(\d{1,5})$/.exec(trimmed);
+  if (!match) {
+    throw new ImageSizeError(
+      `Invalid size "${size}": use WIDTHxHEIGHT in pixels, for example "1024x1024", or "auto".`,
+    );
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (width < 1 || height < 1 || width > 16384 || height > 16384) {
+    throw new ImageSizeError(
+      `Invalid size "${size}": each side must be between 1 and 16384 pixels.`,
+    );
+  }
+  return { width, height };
+}
+
 /**
  * A thin pass-through: the caller's prompt goes to Codex as written. The only
  * additions are where to put the files and the speed/size knobs.

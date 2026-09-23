@@ -40,7 +40,7 @@ git clone https://github.com/ossmalaysia/codex-local-mcp.git
 cd codex-local-mcp
 npm install
 npm run build
-npm test          # 11 tests should pass, no Codex needed
+npm test          # all tests should pass, no Codex needed
 ```
 
 ## Step 4 — Collect your absolute paths

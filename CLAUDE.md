@@ -8,12 +8,17 @@ stdio transport only.
 ```bash
 npm install
 npm run build     # tsc -> dist/
-npm test          # vitest, 11 tests, no Codex CLI or API key required
+npm test          # vitest, no Codex CLI or API key required
 npm run dev       # tsc --watch
 ```
 
 Tests run against a **fake Codex** (`test/fake-codex.mjs`) wrapped in a platform-native shim,
-so the suite is hermetic. Never make a test depend on the real CLI.
+so the suite is hermetic. Never make a test depend on the real CLI. The fake writes the prompt
+it received to `notes.txt`, which is how tests check what actually reached Codex.
+
+Test tool behaviour through a real MCP client: `createServer()` connected to
+`InMemoryTransport.createLinkedPair()` (see `test/image-size.test.ts`). That exercises schema
+validation and result formatting, which calling internal functions directly would skip.
 
 ## Architecture
 
@@ -21,7 +26,8 @@ One job per module. Keep it that way.
 
 | File | Responsibility |
 |---|---|
-| `src/index.ts` | MCP wiring and tool schemas only. No business logic. |
+| `src/index.ts` | Entrypoint: connects the server to stdio. Nothing else. |
+| `src/server.ts` | `createServer()`: tool and resource registration, schemas, result formatting. No business logic. |
 | `src/codex.ts` | Spawning `codex exec`, timeout, process-tree kill, output capping. |
 | `src/workspace.ts` | Workspace resolution (escape-proof) and before/after snapshots. |
 | `src/artifacts.ts` | Classifying changed files, inlining images, reading one artifact. |
@@ -86,8 +92,12 @@ This project is developed on Windows and these were all real bugs. Do not "simpl
 - Comments explain *why*, especially for the platform workarounds above. Do not remove them.
 - Size control belongs in this server, not in the prompt. Codex's built-in `image_gen` tool
   does not accept `quality` or `output_format` as arguments (those are fallback-CLI-only
-  controls), and gpt-image-2 requires at least 655,360 pixels per image, so a generated PNG is
-  essentially always too large to inline untouched. Enforce limits in code.
+  controls), and generated PNGs routinely run to several megabytes, so they are essentially
+  always too large to inline untouched. Enforce limits in code.
+- A requested image `size` is validated for shape only (`WIDTHxHEIGHT` or `auto`). Do not add
+  the gpt-image-2 API limits (multiples of 16, a 655,360-pixel minimum): they govern Codex's API
+  fallback, not its built-in tool, which has returned an exact 800x600. The server cannot force
+  a size, so it reports actual dimensions and flags mismatches instead.
 - Prompts sent to Codex are pass-through. Codex is an agent that already knows how to work;
   over-scripting its prompt causes it to take worse paths (an early version instructed it to
   call an image API, which made it ignore its own native image tool).

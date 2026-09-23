@@ -10,9 +10,20 @@ const ATTEMPTS: Array<{ width: number; quality: number }> = [
   { width: 512, quality: 45 },
 ];
 
-/** base64 length for a buffer of n bytes, without doing the encoding. */
-export function b64Length(bytes: number): number {
-  return Math.ceil(bytes / 3) * 4;
+/**
+ * Pixel dimensions of an image, read from bytes already in memory. Used to
+ * report what Codex actually produced, since a requested size is a request to
+ * the agent rather than something this server can enforce.
+ */
+export async function imageDimensions(
+  source: Buffer,
+): Promise<{ width: number; height: number } | undefined> {
+  try {
+    const { width, height } = await sharp(source).metadata();
+    return width && height ? { width, height } : undefined;
+  } catch {
+    return undefined; // Not a decodable image.
+  }
 }
 
 export interface Preview {
