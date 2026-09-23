@@ -22,7 +22,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.2",
     "conventional-changelog-conventionalcommits": "^10.4.0",
     "semantic-release": "^25.0.9",
     "typescript": "^7.0.2",
