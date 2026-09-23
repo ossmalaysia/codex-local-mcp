@@ -1,4 +1,5 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { z } from "zod";
 import { config } from "./config.js";
@@ -86,12 +87,19 @@ function formatTask(result: TaskResult) {
 }
 
 /**
+ * One source of truth for the version. Releases are git tags cut by
+ * semantic-release, and package.json carries a development placeholder between
+ * them, so this reports "0.0.0-development" for an untagged checkout.
+ */
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
+
+/**
  * Build the MCP server with every tool and resource registered, but not yet
  * connected to a transport. index.ts connects it to stdio; tests connect it to
  * an in-memory transport and drive it through a real MCP client.
  */
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "codex-local-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "codex-local-mcp", version });
 
   server.registerTool(
     "codex_run",

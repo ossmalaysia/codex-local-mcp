@@ -161,6 +161,20 @@ See [CLAUDE.md](CLAUDE.md) for architecture and the invariants to preserve, and
 CI runs the build, the test suite and `npm audit` on Ubuntu, Windows and macOS against
 Node 20 and 22, plus weekly CodeQL analysis.
 
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org/). Releases are cut automatically
+from [Conventional Commits](https://www.conventionalcommits.org/) and published as tags with
+release notes on the [Releases page](https://github.com/ossmalaysia/codex-local-mcp/releases).
+To use a specific release, check out its tag:
+
+```bash
+git checkout v0.1.0   # or any later tag
+```
+
+While the major version is `0`, minor releases may still contain breaking changes, which are
+always called out in the release notes.
+
 ## Security
 
 Please read [SECURITY.md](SECURITY.md). Report vulnerabilities privately through GitHub's
