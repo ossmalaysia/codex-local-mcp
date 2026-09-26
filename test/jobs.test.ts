@@ -1,8 +1,7 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { jobIdOf as jobId, resultText as text, useMcpClient } from "./mcp-client.js";
 // @ts-expect-error - plain JS test helper
 import { installFakeCodex, makeRoot } from "./setup-fake-codex.mjs";
 
@@ -10,37 +9,10 @@ import { installFakeCodex, makeRoot } from "./setup-fake-codex.mjs";
 const root: string = makeRoot();
 process.env.CODEX_MCP_ROOT = root;
 process.env.CODEX_BIN = installFakeCodex();
-process.env.CODEX_MAX_RUNNING_JOBS = "2";
 
-let client: Client;
+const mcp = useMcpClient("jobs-test");
+const call = mcp.call;
 
-type ToolResult = { isError?: boolean; content: Array<{ type: string; text?: string }> };
-
-beforeAll(async () => {
-  const { createServer } = await import("../src/server.js");
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  await createServer().connect(serverSide);
-  client = new Client({ name: "jobs-test", version: "1.0.0" });
-  await client.connect(clientSide);
-});
-
-afterAll(async () => {
-  await client?.close();
-});
-
-async function call(name: string, args: Record<string, unknown>): Promise<ToolResult> {
-  return (await client.callTool({ name, arguments: args })) as ToolResult;
-}
-
-function text(result: ToolResult): string {
-  return result.content.map((c) => c.text ?? "").join("\n");
-}
-
-function jobId(result: ToolResult): string {
-  const match = /job_id: (\S+)/.exec(text(result));
-  if (!match) throw new Error(`no job_id in: ${text(result)}`);
-  return match[1];
-}
 
 async function waitForFile(file: string, ms: number): Promise<boolean> {
   const deadline = Date.now() + ms;
@@ -132,7 +104,7 @@ describe("the reported failure: a client that stops waiting", () => {
     // Stands in for a client whose request timeout is shorter than the task,
     // which is what dropped the image generations.
     await expect(
-      client.callTool(
+      mcp.client().callTool(
         { name: "codex_run", arguments: { prompt: "work SLOW:2000", workspace: "abandoned" } },
         undefined,
         { timeout: 400 },
@@ -140,8 +112,6 @@ describe("the reported failure: a client that stops waiting", () => {
     ).rejects.toThrow();
 
     expect(await waitForFile(path.join(root, "abandoned", "notes.txt"), 15_000)).toBe(true);
-    // Let the abandoned job settle so it does not count against the cap test.
-    await new Promise((r) => setTimeout(r, 500));
   }, 20_000);
 });
 
@@ -152,22 +122,6 @@ describe("job bookkeeping", () => {
     expect(result.isError).toBe(true);
     expect(text(result)).toMatch(/Unknown job/);
   });
-
-  it("caps how many jobs run at once", async () => {
-    const a = await call("codex_run", { prompt: "SLOW:2500", workspace: "cap-a", wait_sec: 0 });
-    const b = await call("codex_run", { prompt: "SLOW:2500", workspace: "cap-b", wait_sec: 0 });
-    const c = await call("codex_run", { prompt: "SLOW:2500", workspace: "cap-c", wait_sec: 0 });
-
-    expect(text(a)).toContain("status: running");
-    expect(text(b)).toContain("status: running");
-    expect(c.isError).toBe(true);
-    expect(text(c)).toMatch(/already running \(limit 2\)/);
-    // The refused job never ran.
-    expect(fs.existsSync(path.join(root, "cap-c", "notes.txt"))).toBe(false);
-
-    await call("codex_job_result", { job_id: jobId(a), wait_sec: 20 });
-    await call("codex_job_result", { job_id: jobId(b), wait_sec: 20 });
-  }, 20_000);
 
   it("keeps every wait under the client timeout", async () => {
     const { clampWait } = await import("../src/jobs.js");

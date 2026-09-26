@@ -1,8 +1,7 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { resultText as allText, useMcpClient, type ToolResult } from "./mcp-client.js";
 // @ts-expect-error - plain JS test helper
 import { installFakeCodex, makeRoot } from "./setup-fake-codex.mjs";
 
@@ -11,32 +10,11 @@ const root: string = makeRoot();
 process.env.CODEX_MCP_ROOT = root;
 process.env.CODEX_BIN = installFakeCodex();
 
-let client: Client;
-
-type ToolResult = { isError?: boolean; content: Array<{ type: string; text?: string }> };
-
-beforeAll(async () => {
-  const { createServer } = await import("../src/server.js");
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  await createServer().connect(serverSide);
-  client = new Client({ name: "image-size-test", version: "1.0.0" });
-  await client.connect(clientSide);
-});
-
-afterAll(async () => {
-  await client?.close();
-});
+const mcp = useMcpClient("image-size-test");
 
 /** Call the image tool through a real MCP client. Never opens a viewer. */
-async function generate(args: Record<string, unknown>): Promise<ToolResult> {
-  return (await client.callTool({
-    name: "codex_generate_image",
-    arguments: { prompt: "a red cube", open: false, ...args },
-  })) as ToolResult;
-}
-
-function allText(result: ToolResult): string {
-  return result.content.map((c) => c.text ?? "").join("\n");
+function generate(args: Record<string, unknown>): Promise<ToolResult> {
+  return mcp.call("codex_generate_image", { prompt: "a red cube", open: false, ...args });
 }
 
 /** The fake Codex writes the prompt it received on stdin into notes.txt. */
