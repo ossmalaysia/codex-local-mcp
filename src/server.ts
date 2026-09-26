@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { config } from "./config.js";
 import { readArtifact, imageMimeType, uriToPath } from "./artifacts.js";
+import { clampWait, getJob, startJob, waitForJob, type Job } from "./jobs.js";
 import { openInViewer } from "./open.js";
 import {
   executeTask,
@@ -12,6 +13,7 @@ import {
   taskFailed,
   type TaskResult,
 } from "./task.js";
+import { resolveWorkspace } from "./workspace.js";
 
 type Content =
   | { type: "text"; text: string }
@@ -24,9 +26,62 @@ type Content =
       description?: string;
     };
 
-function errorResult(err: unknown) {
+// A type alias rather than an interface: only aliases get the implicit index
+// signature the SDK's CallToolResult requires.
+type ToolResult = {
+  content: Content[];
+  isError?: boolean;
+};
+
+function errorResult(err: unknown): ToolResult {
   const message = err instanceof Error ? err.message : String(err);
-  return { content: [{ type: "text" as const, text: `Error: ${message}` }], isError: true };
+  return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
+}
+
+/** Schema for the optional per-call wait, shared by every job-backed tool. */
+const waitSecSchema = z
+  .number()
+  .optional()
+  .describe(
+    `Seconds to wait for the result before returning a job_id instead. Default ${config.waitSec}, ` +
+      `maximum ${config.maxWaitSec}, which keeps the call under common 60-second client timeouts.`,
+  );
+
+function runningResult(job: Job<unknown>): ToolResult {
+  const elapsed = Math.round((Date.now() - job.startedAt) / 1000);
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          `status: running\njob_id: ${job.id}\nworkspace: ${job.workspace}\nelapsed: ${elapsed}s\n\n` +
+          `Codex is still working. Call codex_job_result with this job_id to collect the result; ` +
+          `each call waits up to ${config.waitSec}s. Any files it produces also appear in the ` +
+          `workspace above.`,
+      },
+    ],
+  };
+}
+
+/** Wait a bounded time, then return the finished result or a pollable job id. */
+async function respondWithJob(
+  job: Job<ToolResult>,
+  waitSec: number,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  const finished = await waitForJob(job, waitSec, signal);
+  if (!finished || !job.outcome) return runningResult(job);
+  return job.outcome.ok ? job.outcome.value : errorResult(job.outcome.error);
+}
+
+/**
+ * Resolve the workspace before the job starts, so a bad name fails immediately
+ * and the job can report where its files will appear. Returns the relative name
+ * to hand to executeTask, which resolves it to the same directory.
+ */
+function prepareWorkspace(name?: string): { workspace: string; relName: string } {
+  const workspace = resolveWorkspace(name);
+  return { workspace, relName: path.relative(config.root, workspace) };
 }
 
 function formatTask(result: TaskResult) {
@@ -108,7 +163,8 @@ export function createServer(): McpServer {
       description:
         "Hand a natural-language task to the local Codex CLI coding agent. Codex can write and run " +
         "code, install packages and call APIs inside an isolated workspace folder, then this returns " +
-        "its output plus any files it created. Blocking: it does not return until Codex finishes.",
+        "its output plus any files it created. If Codex takes longer than wait_sec, this returns " +
+        "status: running and a job_id instead; call codex_job_result with it to collect the result.",
       inputSchema: {
         prompt: z.string().min(1).describe("The task for Codex, written as you would to a developer."),
         workspace: z
@@ -123,11 +179,23 @@ export function createServer(): McpServer {
           .optional()
           .describe(`Seconds before Codex is killed. Default ${config.defaultTimeoutSec}.`),
         model: z.string().optional().describe("Override the Codex model for this run."),
+        wait_sec: waitSecSchema,
       },
     },
-    async (args) => {
+    async (args, extra) => {
       try {
-        return formatTask(await executeTask(args));
+        const { workspace, relName } = prepareWorkspace(args.workspace);
+        const job = startJob("codex_run", workspace, async () =>
+          formatTask(
+            await executeTask({
+              prompt: args.prompt,
+              workspace: relName,
+              timeout_sec: args.timeout_sec,
+              model: args.model,
+            }),
+          ),
+        );
+        return await respondWithJob(job, clampWait(args.wait_sec), extra.signal);
       } catch (err) {
         return errorResult(err);
       }
@@ -141,7 +209,9 @@ export function createServer(): McpServer {
       description:
         "Generate images with the local Codex CLI. The prompt is passed through as written. Returns " +
         "the saved file paths and shows the images inline, downscaling a preview when a file is too " +
-        "large to inline. Defaults to a fast low-quality 1024x1024 draft; raise quality for final assets.",
+        "large to inline. Defaults to a fast low-quality 1024x1024 draft; raise quality for final assets. " +
+        "Image generation often takes longer than wait_sec, in which case this returns status: running " +
+        "and a job_id; call codex_job_result with it to collect the images.",
       inputSchema: {
         prompt: z.string().min(1).describe("What the image should depict."),
         count: z.number().int().min(1).max(10).optional().describe("How many images. Default 1."),
@@ -168,63 +238,104 @@ export function createServer(): McpServer {
             "Open the generated images in the user's default image viewer. Default true, because " +
               "MCP clients do not render tool-result images into the chat.",
           ),
+        wait_sec: waitSecSchema,
       },
     },
-    async (args) => {
+    async (args, extra) => {
       try {
         const size = args.size ?? "1024x1024";
-        // Reject a malformed size here, before spending a Codex run on it.
+        // Reject a malformed size or workspace here, before starting a job.
         const requested = parseImageSize(size);
+        const { workspace, relName } = prepareWorkspace(args.workspace);
 
-        const result = await executeTask({
-          prompt: imagePromptTemplate(args.prompt, args.count ?? 1, size, args.quality ?? "low"),
-          workspace: args.workspace,
-          timeout_sec: args.timeout_sec,
+        const job = startJob("codex_generate_image", workspace, async () => {
+          const result = await executeTask({
+            prompt: imagePromptTemplate(args.prompt, args.count ?? 1, size, args.quality ?? "low"),
+            workspace: relName,
+            timeout_sec: args.timeout_sec,
+          });
+          return finishImages(result, requested, args.open !== false);
         });
-
-        const response = formatTask(result);
-
-        // The size is a request to the agent, not something this server can
-        // enforce, so say plainly when the result differs from what was asked.
-        if (requested !== "auto") {
-          for (const f of result.artifacts.files) {
-            if (!f.width || !f.height) continue;
-            if (f.width !== requested.width || f.height !== requested.height) {
-              response.content.push({
-                type: "text",
-                text:
-                  `Note: ${f.path} is ${f.width}x${f.height}, not the requested ` +
-                  `${requested.width}x${requested.height}.`,
-              });
-            }
-          }
-        }
-
-        if (args.open !== false) {
-          const opened: string[] = [];
-          const failures: string[] = [];
-          for (const file of result.artifacts.files) {
-            if (!imageMimeType(file.path)) continue;
-            const failure = await openInViewer(path.join(result.workspace, file.path));
-            if (failure) failures.push(failure);
-            else opened.push(file.path);
-          }
-          if (opened.length) {
-            response.content.push({
-              type: "text",
-              text: `Opened in the default image viewer: ${opened.join(", ")}`,
-            });
-          }
-          if (failures.length) {
-            response.content.push({ type: "text", text: failures[0] });
-          }
-        }
-        return response;
+        return await respondWithJob(job, clampWait(args.wait_sec), extra.signal);
       } catch (err) {
         return errorResult(err);
       }
     },
   );
+
+  server.registerTool(
+    "codex_job_result",
+    {
+      title: "Collect the result of a running Codex job",
+      description:
+        "Get the result of a codex_run or codex_generate_image call that returned status: running. " +
+        "Waits up to wait_sec for the job to finish; if it is still running, call again. Results " +
+        `stay available for ${Math.round(config.jobRetentionSec / 60)} minutes after the job finishes.`,
+      inputSchema: {
+        job_id: z.string().min(1).describe("The job_id returned by codex_run or codex_generate_image."),
+        wait_sec: waitSecSchema,
+      },
+    },
+    async (args, extra) => {
+      const job = getJob(args.job_id);
+      if (!job) {
+        return errorResult(
+          `Unknown job "${args.job_id}". It may have expired, or the server restarted. ` +
+            "Any files it produced are still in its workspace.",
+        );
+      }
+      return respondWithJob(job as Job<ToolResult>, clampWait(args.wait_sec), extra.signal);
+    },
+  );
+
+  /**
+   * Remainder of the image tool, run inside the job once Codex finishes, so it
+   * happens whether or not anyone is still waiting on the original call.
+   */
+  async function finishImages(
+    result: TaskResult,
+    requested: ReturnType<typeof parseImageSize>,
+    open: boolean,
+  ): Promise<ToolResult> {
+    const response = formatTask(result);
+
+    // The size is a request to the agent, not something this server can
+    // enforce, so say plainly when the result differs from what was asked.
+    if (requested !== "auto") {
+      for (const f of result.artifacts.files) {
+        if (!f.width || !f.height) continue;
+        if (f.width !== requested.width || f.height !== requested.height) {
+          response.content.push({
+            type: "text",
+            text:
+              `Note: ${f.path} is ${f.width}x${f.height}, not the requested ` +
+              `${requested.width}x${requested.height}.`,
+          });
+        }
+      }
+    }
+
+    if (open) {
+      const opened: string[] = [];
+      const failures: string[] = [];
+      for (const file of result.artifacts.files) {
+        if (!imageMimeType(file.path)) continue;
+        const failure = await openInViewer(path.join(result.workspace, file.path));
+        if (failure) failures.push(failure);
+        else opened.push(file.path);
+      }
+      if (opened.length) {
+        response.content.push({
+          type: "text",
+          text: `Opened in the default image viewer: ${opened.join(", ")}`,
+        });
+      }
+      if (failures.length) {
+        response.content.push({ type: "text", text: failures[0] });
+      }
+    }
+    return response;
+  }
 
   server.registerTool(
     "codex_read_artifact",

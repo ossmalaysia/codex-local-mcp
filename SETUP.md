@@ -188,6 +188,17 @@ your OS viewer. The full-resolution file path is always in the response.
 If the file is large, the model receives a downscaled preview — the original on disk is
 untouched.
 
+### The call is cut off at about 60 seconds
+
+Many MCP clients abandon a request after 60 seconds, and image generation often takes longer.
+This server returns before that: after 45 seconds (`CODEX_WAIT_SEC`) a still-running task
+answers with `status: running` and a `job_id`. The calling model should then use
+`codex_job_result` with that `job_id`. If you see calls dropped at 60 seconds, you are running
+an older build; update and restart the client.
+
+Do **not** work around it by loosening Codex's sandbox. That removes the confinement that keeps
+Codex inside its workspace, and it does not fix the timeout.
+
 ### Runs time out
 
 Raise `CODEX_TIMEOUT_SEC` (default 300). High-quality or large images take longer. The

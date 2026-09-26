@@ -19,6 +19,12 @@ process.stdin.on("end", () => {
     return;
   }
 
+  // "SLOW:<ms>" delays the work, standing in for a run that outlasts a call.
+  const slow = /SLOW:(\d+)/.exec(prompt);
+  setTimeout(() => finish(), slow ? Number(slow[1]) : 0);
+});
+
+function finish() {
   fs.writeFileSync(path.join(cwd, "notes.txt"), `prompt: ${prompt}\n`);
   fs.mkdirSync(path.join(cwd, "output"), { recursive: true });
   // 1x1 transparent PNG.
@@ -31,4 +37,4 @@ process.stdin.on("end", () => {
   );
   process.stdout.write("fake codex: wrote notes.txt and output/img.png\n");
   process.exit(0);
-});
+}

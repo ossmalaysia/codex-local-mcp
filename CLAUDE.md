@@ -42,9 +42,12 @@ One job per module. Keep it that way.
 | `src/preview.ts` | Downscaling oversized images with sharp. |
 | `src/open.ts` | Opening a file in the OS viewer. |
 | `src/task.ts` | Orchestration: prepare, snapshot, run, diff, report. |
+| `src/jobs.ts` | Running tasks detached from the call that started them, and polling for results. |
 | `src/config.ts` | Environment configuration, read once at import. |
 
-Flow: resolve workspace → snapshot → spawn codex → snapshot → diff → report.
+Flow: resolve workspace → start job → snapshot → spawn codex → snapshot → diff → report. The
+tool call waits for the job for up to `wait_sec`, then returns either the result or a `job_id`
+that `codex_job_result` collects later.
 
 ## Invariants
 
@@ -60,6 +63,14 @@ in `SECURITY.md`.
 - **Artifacts are discovered by filesystem diff**, not by parsing Codex's output. Do not add
   output parsing; it is brittle and Codex's format is not a contract.
 - **Every tool returns a readable error result**, never an unhandled rejection.
+- **No tool call blocks longer than `maxWaitSec` (50s).** MCP clients built on the official SDK
+  abandon a request at 60 seconds by default, and an image routinely takes longer. Work that
+  outlasts the wait keeps running as a job and is collected with `codex_job_result`. A
+  cancelled or timed-out call stops the *wait*, never the job.
+- **Validate before starting a job.** Bad sizes and workspace names must fail in the calling
+  request, not become a job that fails later.
+- **Concurrent jobs are capped** (`CODEX_MAX_RUNNING_JOBS`). Jobs outlive their calls, so without
+  a cap a caller could start Codex processes faster than they finish.
 - **Inline budgets are measured in base64 characters, never file bytes.** A raw-byte budget
   understates the payload by a third and lets an image just under the limit produce a larger
   response than one far over it. There is a per-image budget and a per-response total.

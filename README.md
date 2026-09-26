@@ -96,11 +96,30 @@ Any MCP client that can launch a stdio server works. Point it at
 
 | Tool | Arguments | Description |
 |---|---|---|
-| `codex_run` | `prompt`, `workspace?`, `timeout_sec?`, `model?` | Run any task. Blocks until Codex finishes. |
-| `codex_generate_image` | `prompt`, `count?`, `size?`, `quality?`, `workspace?`, `open?` | Generate images. The prompt is passed through as written. |
+| `codex_run` | `prompt`, `workspace?`, `timeout_sec?`, `model?`, `wait_sec?` | Run any task. |
+| `codex_generate_image` | `prompt`, `count?`, `size?`, `quality?`, `workspace?`, `open?`, `wait_sec?` | Generate images. The prompt is passed through as written. |
+| `codex_job_result` | `job_id`, `wait_sec?` | Collect the result of a task that was still running. |
 | `codex_read_artifact` | `path`, `max_bytes?` | Read a file from a workspace. |
 
 Reuse the same `workspace` name across calls to keep working on the same files.
+
+### Long-running tasks
+
+MCP clients built on the official SDK give up on a request after 60 seconds by default, and
+image generation often takes longer. So a call waits up to `wait_sec` (default 45, maximum 50)
+for Codex. If Codex has finished, you get the result as usual. If not, the call returns at once
+with:
+
+```
+status: running
+job_id: a3b1d698-5754-490c-ab5d-bc1ea76149a2
+workspace: /path/to/codex-workspaces/my-task
+```
+
+Codex keeps working. Call `codex_job_result` with the `job_id` to collect the result; each
+call waits up to `wait_sec` again, so poll until it finishes. Finished results stay available
+for an hour. Jobs are held in memory, so a server restart loses the `job_id`, but any files
+produced are still in the workspace shown.
 
 `codex_generate_image` defaults to `quality: "low"` and `size: "1024x1024"` — a fast draft.
 `size` must be `WIDTHxHEIGHT` or `auto`; a malformed value is rejected before Codex runs. The
@@ -125,6 +144,9 @@ All optional, set through the client's `env` block.
 | `CODEX_MAX_INLINE_IMAGE_BYTES` | `1048576` | Above this, a downscaled preview is inlined instead. |
 | `CODEX_MAX_REPORTED_FILES` | `200` | Cap on reported changed files. |
 | `CODEX_NETWORK_ACCESS` | `true` | Set `false` to deny Codex the network. |
+| `CODEX_WAIT_SEC` | `45` | How long a call waits before returning a `job_id`. Capped at 50. |
+| `CODEX_MAX_RUNNING_JOBS` | `4` | How many Codex jobs may run at once. |
+| `CODEX_JOB_RETENTION_SEC` | `3600` | How long a finished job's result stays retrievable. |
 
 ## How it works
 
