@@ -67,4 +67,18 @@ export const config = {
   maxReportedFiles: num("CODEX_MAX_REPORTED_FILES", 200),
   /** Image APIs need the network; workspace-write blocks it unless we opt in. */
   networkAccess: process.env.CODEX_NETWORK_ACCESS !== "false",
+  /**
+   * How long a tool call waits for its job before answering "still running".
+   * Must stay under the 60-second request timeout that MCP clients built on
+   * the official SDK use by default, with room for the response to travel.
+   */
+  waitSec: num("CODEX_WAIT_SEC", 45),
+  maxWaitSec: 50,
+  /**
+   * Jobs outlive the call that started them, so a caller could otherwise start
+   * Codex processes faster than they finish. This bounds how many run at once.
+   */
+  maxRunningJobs: num("CODEX_MAX_RUNNING_JOBS", 4),
+  /** How long a finished job's result stays retrievable. */
+  jobRetentionSec: num("CODEX_JOB_RETENTION_SEC", 3600),
 };
