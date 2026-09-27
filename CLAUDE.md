@@ -7,7 +7,7 @@ stdio transport only.
 
 ```bash
 npm install
-npm run build     # tsc -> dist/
+npm run build     # tsc -> dist/, type-checks ui/, bundles the in-chat view
 npm test          # vitest, no Codex CLI or API key required
 npm run dev       # tsc --watch
 ```
@@ -44,6 +44,8 @@ One job per module. Keep it that way.
 | `src/task.ts` | Orchestration: prepare, snapshot, run, diff, report. |
 | `src/jobs.ts` | Running tasks detached from the call that started them, and polling for results. |
 | `src/config.ts` | Environment configuration, read once at import. |
+| `ui/image-viewer.ts` | The in-chat image view (an MCP App), bundled by `scripts/build-ui.mjs` into `dist/ui/image-viewer.html`. |
+| `ui/parse.ts` | Pure parsing of tool results for the view. Unit-tested; no DOM. |
 
 Flow: resolve workspace → start job → snapshot → spawn codex → snapshot → diff → report. The
 tool call waits for the job for up to `wait_sec`, then returns either the result or a `job_id`
@@ -89,6 +91,14 @@ in `SECURITY.md`.
   `codex.cmd` run outside the sandbox. `CODEX_BIN` is resolved absolutely at startup.
 - **Every spawned helper needs an `error` listener.** `try/catch` does not catch a child
   process's asynchronous launch failure, and an unhandled one terminates the server.
+- **The in-chat view reads the text the server writes for the model.** `ui/parse.ts` parses
+  `status: running`, `job_id:`, `workspace:` and `Image: <path> (<detail>)` lines. Changing
+  that output in `src/server.ts` means changing the parser; `test/image-view.test.ts` feeds
+  the parser real server results so drift fails a test.
+- **The view never treats result data as markup.** Text goes in with `textContent`, and image
+  sources are only built for PNG, JPEG, GIF and WebP data. Filenames come from Codex.
+- **The view must stay self-contained.** Hosts render it with a policy that blocks the network,
+  so the bundle inlines all script and style; it calls tools through the host, never `fetch`.
 - **Resource reads honour the same root confinement as the tools.** `resources/read` goes
   through `readArtifact`, so a path outside `CODEX_MCP_ROOT` is refused.
 

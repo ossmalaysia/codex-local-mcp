@@ -10,11 +10,12 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsc -p ui && node scripts/build-ui.mjs",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "pretest": "node scripts/build-ui.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
@@ -22,8 +23,10 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "^2.0.0",
     "@types/node": "^26.5.1",
     "conventional-changelog-conventionalcommits": "9.3.1",
+    "esbuild": "^0.28.2",
     "semantic-release": "^25.0.9",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"

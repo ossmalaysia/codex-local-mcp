@@ -103,6 +103,17 @@ Any MCP client that can launch a stdio server works. Point it at
 
 Reuse the same `workspace` name across calls to keep working on the same files.
 
+### Images in the chat
+
+In clients that support [MCP Apps](https://modelcontextprotocol.io/extensions/apps) (Claude
+Desktop, for example), `codex_generate_image` renders an image card **inside the chat**. While
+Codex is still working the card shows progress, and it collects the finished image itself, so the
+picture appears even if the model never polls. The card shows a preview; the full-resolution file
+is in the workspace and opens in your default viewer.
+
+Clients without MCP Apps support ignore the card and get the same text, image and link results
+as before.
+
 ### Long-running tasks
 
 MCP clients built on the official SDK give up on a request after 60 seconds by default, and
