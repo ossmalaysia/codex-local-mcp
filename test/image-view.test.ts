@@ -7,6 +7,7 @@ import { installFakeCodex, makeRoot } from "./setup-fake-codex.mjs";
 // config reads env at import time, so the environment must be set up first.
 process.env.CODEX_MCP_ROOT = makeRoot();
 process.env.CODEX_BIN = installFakeCodex();
+process.env.CODEX_MCP_APP_VIEW = "true";
 
 const mcp = useMcpClient("image-view-test");
 const VIEW_URI = "ui://codex-local-mcp/image-viewer.html";

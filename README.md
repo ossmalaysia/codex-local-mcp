@@ -103,16 +103,22 @@ Any MCP client that can launch a stdio server works. Point it at
 
 Reuse the same `workspace` name across calls to keep working on the same files.
 
-### Images in the chat
+### Images in the chat (experimental, opt-in)
 
-In clients that support [MCP Apps](https://modelcontextprotocol.io/extensions/apps) (Claude
-Desktop, for example), `codex_generate_image` renders an image card **inside the chat**. While
+Set `CODEX_MCP_APP_VIEW=true` and, in clients that support
+[MCP Apps](https://modelcontextprotocol.io/extensions/apps), `codex_generate_image` renders an
+image card **inside the chat**. While
 Codex is still working the card shows progress, and it collects the finished image itself, so the
 picture appears even if the model never polls. The card shows a preview; the full-resolution file
 is in the workspace and opens in your default viewer.
 
 Clients without MCP Apps support ignore the card and get the same text, image and link results
 as before.
+
+It is **off by default**. In Claude Desktop chats that reach this server through the desktop
+app's device connection, declaring the card stopped image calls from arriving at all: they timed
+out after four minutes with nothing logged by the server, while the same request without the card
+worked. Until that is resolved, only enable it in a client you have tested it with.
 
 ### Long-running tasks
 
@@ -158,6 +164,7 @@ All optional, set through the client's `env` block.
 | `CODEX_WAIT_SEC` | `45` | How long a call waits before returning a `job_id`. Capped at 50. |
 | `CODEX_MAX_RUNNING_JOBS` | `4` | How many Codex jobs may run at once. |
 | `CODEX_JOB_RETENTION_SEC` | `3600` | How long a finished job's result stays retrievable. |
+| `CODEX_MCP_APP_VIEW` | `false` | Show generated images in the chat as an MCP App card. Experimental; see above. |
 
 ## How it works
 

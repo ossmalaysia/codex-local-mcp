@@ -97,6 +97,10 @@ in `SECURITY.md`.
   the parser real server results so drift fails a test.
 - **The view never treats result data as markup.** Text goes in with `textContent`, and image
   sources are only built for PNG, JPEG, GIF and WebP data. Filenames come from Codex.
+- **The view is opt-in (`CODEX_MCP_APP_VIEW`) and must stay off by default.** In Claude
+  Desktop's device-connected chats, advertising it (the `_meta.ui` link or the `ui://` resource)
+  stopped image calls reaching the server entirely. With the flag off, the server's tools and
+  resources match what worked before. Do not flip the default without re-testing there.
 - **The view must stay self-contained.** Hosts render it with a policy that blocks the network,
   so the bundle inlines all script and style; it calls tools through the host, never `fetch`.
 - **Resource reads honour the same root confinement as the tools.** `resources/read` goes

@@ -81,4 +81,11 @@ export const config = {
   maxRunningJobs: num("CODEX_MAX_RUNNING_JOBS", 4),
   /** How long a finished job's result stays retrievable. */
   jobRetentionSec: num("CODEX_JOB_RETENTION_SEC", 3600),
+  /**
+   * Advertise the in-chat image view (an MCP App) on codex_generate_image.
+   * Off by default: in Claude Desktop's device-connected chats, declaring the
+   * view stopped image calls from ever reaching this server (two 4-minute
+   * timeouts, no tools/call logged), while the same call without it worked.
+   */
+  mcpAppView: process.env.CODEX_MCP_APP_VIEW === "true",
 };
