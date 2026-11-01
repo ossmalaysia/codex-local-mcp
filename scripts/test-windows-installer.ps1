@@ -31,7 +31,8 @@ try {
   Write-Output "Installed MSI verified: $Version, DPAPI, bundled tools, runtime metadata."
 } finally {
   if ($installed) {
-    $process = Start-Process -FilePath msiexec.exe -ArgumentList @('/x',('"' + $msi + '"'),'/qn','/norestart') -WindowStyle Hidden -Wait -PassThru
+    $uninstallLog = Join-Path $projectRoot "artifacts/uninstall-test-$Version.log"
+    $process = Start-Process -FilePath msiexec.exe -ArgumentList @('/x',('"' + $msi + '"'),'/qn','/norestart','/l*v',('"' + $uninstallLog + '"')) -WindowStyle Hidden -Wait -PassThru
     if ($process.ExitCode -notin @(0,3010)) { throw "MSI uninstall test failed: $($process.ExitCode)" }
     if (Test-Path -LiteralPath (Join-Path $target 'CodexMCP.exe')) { throw 'MSI uninstall left the application executable' }
     Write-Output 'MSI uninstall verified.'

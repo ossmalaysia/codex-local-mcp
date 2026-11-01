@@ -126,6 +126,6 @@ $msi = Join-Path $artifactsRoot "CodexLocalMCP-$Version-windows-x64.msi"
 & $wix build $wxsFile -arch x64 -ext WixToolset.UI.wixext -o $msi
 if ($LASTEXITCODE -ne 0) { throw 'Windows installer compilation failed' }
 $digest = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
-($digest + '  ' + (Split-Path -Leaf $msi)) | Set-Content -LiteralPath ($msi + '.sha256') -Encoding ascii
+[IO.File]::WriteAllText(($msi + '.sha256'), ($digest + '  ' + (Split-Path -Leaf $msi) + "`n"), (New-Object Text.UTF8Encoding($false)))
 Write-Output "Installer built: $msi"
 Write-Output "SHA256: $digest"
