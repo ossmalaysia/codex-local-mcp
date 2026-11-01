@@ -3,13 +3,20 @@
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { createServer } from "node:net";
-import { mkdir, mkdtemp, readFile, access } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  access,
+  copyFile,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import assert from "node:assert/strict";
 const mode = process.argv[2] ?? "clean";
 assert.ok(
-  ["clean", "legacy"].includes(mode),
-  "Choose the clean or legacy test fixture",
+  ["clean", "legacy", "saved"].includes(mode),
+  "Choose the clean, legacy, or saved-settings test fixture",
 );
 const app = path.resolve(
   mode === "legacy"
@@ -17,6 +24,26 @@ const app = path.resolve(
     : "artifacts/native-desktop-0.7.0/payload/CodexMCP.exe",
 );
 const root = await mkdtemp(path.resolve("artifacts/desktop-native-test-"));
+if (mode === "saved") {
+  const source = path.join(process.env.LOCALAPPDATA, "CodexLocalMCPData");
+  const destination = path.join(root, "CodexLocalMCPData");
+  await mkdir(destination);
+  const settings = JSON.parse(
+    (await readFile(path.join(source, "settings.json"), "utf8")).replace(
+      /^\uFEFF/,
+      "",
+    ),
+  );
+  settings.Workspace = path.join(root, "CodexMCPWorkspaces");
+  await writeFile(
+    path.join(destination, "settings.json"),
+    JSON.stringify(settings),
+  );
+  await copyFile(
+    path.join(source, "cloudflare.json"),
+    path.join(destination, "cloudflare.json"),
+  );
+}
 const listener = createServer();
 await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
 const port = listener.address().port;
@@ -58,6 +85,17 @@ try {
   const state = () =>
     page.evaluate(() => window.__TAURI__.core.invoke("state"));
   assert.equal((await state()).version, "0.7.0");
+  if (mode === "saved") {
+    assert.equal((await state()).settings.passwordSaved, true);
+    const account = await page.evaluate(() =>
+      window.__TAURI__.core.invoke("cloudflare_status"),
+    );
+    assert.equal(account.signedIn, true);
+    assert.ok(account.domains.length > 0);
+    console.log(
+      "Existing encrypted C# settings and Cloudflare sign-in imported and validated.",
+    );
+  }
   await page.getByRole("button", { name: "2 Accounts" }).click();
   await page
     .locator("#openai-state")

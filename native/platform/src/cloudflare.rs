@@ -15,7 +15,7 @@ pub struct Credentials {
     #[serde(rename = "apiToken")]
     token: String,
     #[serde(default)]
-    endpoint: String,
+    endpoint: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -25,7 +25,13 @@ struct Owned {
     name: String,
     hostname: String,
     port: u16,
+    #[serde(default, deserialize_with = "empty_if_null")]
     token: String,
+}
+fn empty_if_null<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -182,7 +188,7 @@ pub fn decode_certificate(pem: &str) -> Result<Credentials> {
         identifier(&auth.account)
             && identifier(&auth.zone)
             && (10..=8192).contains(&auth.token.len())
-            && auth.endpoint.is_empty(),
+            && auth.endpoint.as_deref().unwrap_or("").is_empty(),
         "Invalid Cloudflare sign-in certificate"
     );
     Ok(auth)
@@ -441,6 +447,13 @@ pub async fn reconcile(settings: &Settings) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn imports_csharp_null_endpoint_and_incomplete_tunnel_token() {
+        let value = json!({"Credentials":{"accountID":"a".repeat(32),"zoneID":"b".repeat(32),"apiToken":"saved-token","endpoint":null},"Owned":[{"Id":"id","Account":"account","Name":"name","Hostname":"codex.example.com","Port":3000,"Token":null}]});
+        let stored: Stored = serde_json::from_value(value).unwrap();
+        assert!(stored.credentials.unwrap().endpoint.is_none());
+        assert!(stored.owned[0].token.is_empty());
+    }
     #[test]
     fn rejects_untrusted_hostnames() {
         for h in ["-a", "a.", "a/b", "a:b", "UPPER"] {

@@ -5,7 +5,7 @@ Date: 2026-11-01. Platform: Windows x64. Native desktop package version: 0.7.0.
 ## Desktop and update transition
 
 - The Rust/Tauri desktop compiles with strict TypeScript checks and Clippy warnings treated as errors.
-- Eighteen Rust tests cover the service, DPAPI compatibility, bounded child output, migration paths, and signed update metadata.
+- Nineteen Rust tests cover the service, DPAPI compatibility, saved C# Cloudflare settings, bounded child output, migration paths, and signed updates.
 - Signature tests reject changed metadata, another signing key, older versions, unexpected versions, and foreign installer URLs.
 - Chromium checks cover saved account details, saved passwords, saved hostnames, live activity, update notices, errors, and minimum window width.
 - The actual packaged WebView2 app passed account status, password generation, encrypted settings, restricted IPC, and an MXC sandbox check.
