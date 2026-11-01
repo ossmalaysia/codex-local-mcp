@@ -128,7 +128,9 @@ Image generation quality and background are prompt requests, subject to the imag
 
 The native service reads structured `codex exec --json` events. Activity shows stage history, elapsed time, event count, last-event age, selected settings, token usage, and output metadata.
 The five-second heartbeat does not count as a new Codex event. No invented percentage is shown.
-Commands, prompts, credentials, Base64, and task text do not enter desktop activity.
+Commands, credentials, Base64, and task text do not enter desktop activity.
+Prompts enter activity only when the user turns on the desktop setting, which sets `CODEX_MCP_ACTIVITY_PROMPTS=1`.
+The service then sends the caller's prompt once, bounded to 2,000 characters and 8,000 escaped JSON bytes.
 
 After an image task exits, the service collects only that CLI thread's generated-image cache.
 It validates the thread UUID, confines opened cache files, applies decoder limits, and saves converted files in a fresh workspace output directory.

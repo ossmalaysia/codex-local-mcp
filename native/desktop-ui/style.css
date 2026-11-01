@@ -220,22 +220,35 @@ button:disabled {
   background: #fff1dd;
   color: #925409;
 }
-#notice {
-  display: block;
+#notice-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
   position: sticky;
   top: 12px;
   z-index: 2;
-  padding: 13px 17px;
+  padding: 13px 10px 13px 17px;
   background: #eef0ff;
   border: 1px solid #ccc7ff;
   border-radius: 10px;
   margin-bottom: 20px;
+}
+#notice {
+  flex: 1;
   overflow-wrap: anywhere;
 }
-#notice.error {
+#notice-bar.error {
   background: #fff2ed;
   border-color: #f2bfb1;
   color: #8f3022;
+}
+button.icon {
+  border: 0;
+  background: transparent;
+  padding: 0 8px;
+  font-size: 20px;
+  line-height: 1.2;
+  color: inherit;
 }
 .success {
   padding: 14px;
@@ -313,8 +326,101 @@ li {
   }
 }
 
-#notice[hidden] {
+#notice-bar[hidden] {
   display: none;
+}
+.badge.busy {
+  background: #e8e5ff;
+  color: #4935c9;
+}
+.badge.error {
+  background: #fff2ed;
+  color: #8f3022;
+}
+#locked-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px 10px 17px;
+  margin-bottom: 20px;
+  background: #fff1dd;
+  color: #6f4007;
+  border: 1px solid #f3d3a5;
+  border-radius: 10px;
+}
+#locked-note[hidden] {
+  display: none;
+}
+input:disabled,
+select:disabled {
+  background: #f6f7fb;
+  color: #65738a;
+  cursor: not-allowed;
+}
+details.task-prompt {
+  border-top: 0;
+  padding-top: 0;
+  margin: 4px 0 12px;
+}
+.prompt-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #f6f7fb;
+  border: 1px solid #e0e4ef;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 8px 0 4px;
+  max-height: 200px;
+  overflow: auto;
+  font-size: 13px;
+}
+nav .done-mark {
+  margin-left: auto;
+  font-style: normal;
+  color: #17694b;
+  font-weight: 700;
+}
+button.inline {
+  padding: 0 0 0 6px;
+}
+.success {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#domain-fields > button {
+  margin-top: 4px;
+}
+.sidebar-bottom button.quiet {
+  justify-self: start;
+}
+button:disabled:not([aria-busy]) {
+  cursor: not-allowed;
+}
+/* Short windows: the sidebar scrolls instead of letting its footer slide
+   under the navigation. */
+aside {
+  overflow-y: auto;
+}
+@media (max-height: 700px) {
+  aside {
+    padding-top: 18px;
+    padding-bottom: 14px;
+  }
+  nav {
+    margin-top: 14px;
+    gap: 2px;
+  }
+  nav button {
+    padding: 8px 14px;
+  }
+  .sidebar-bottom small {
+    display: none;
+  }
 }
 
 .task-stage {

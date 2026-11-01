@@ -25,6 +25,8 @@ pub struct Config {
     pub response: usize,
     pub files: usize,
     pub activity: bool,
+    /// The user's opt-in to show submitted prompts in desktop activity.
+    pub activity_prompts: bool,
     pub defaults: crate::task_options::TaskOptions,
 }
 
@@ -111,6 +113,7 @@ impl Config {
             response: number("CODEX_MAX_RESPONSE_B64", 750_000, 10_000_000) as usize,
             files: number("CODEX_MAX_REPORTED_FILES", 200, 1000) as usize,
             activity: value("CODEX_MCP_ACTIVITY", "") == "1",
+            activity_prompts: value("CODEX_MCP_ACTIVITY_PROMPTS", "") == "1",
         })
     }
 

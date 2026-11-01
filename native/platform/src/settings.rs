@@ -16,6 +16,9 @@ pub struct Settings {
     pub network: bool,
     pub port: u16,
     pub execution: crate::task_options::TaskOptions,
+    /// Off by default: prompts can hold private text, so showing them in
+    /// desktop activity is an explicit choice.
+    pub show_prompts: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -32,6 +35,7 @@ impl Default for Settings {
             network: false,
             port: 3000,
             execution: Default::default(),
+            show_prompts: false,
         }
     }
 }
@@ -49,6 +53,8 @@ pub struct Input {
     pub port: u16,
     #[serde(default)]
     pub execution: crate::task_options::TaskOptions,
+    #[serde(default)]
+    pub show_prompts: bool,
 }
 impl Settings {
     pub fn load() -> Result<Self> {
@@ -79,6 +85,7 @@ impl Settings {
         next.network = input.network;
         next.port = input.port;
         next.execution = input.execution;
+        next.show_prompts = input.show_prompts;
         if !input.password.is_empty() {
             next.password = secure::protect(input.password.as_bytes())?;
         }
@@ -163,7 +170,7 @@ impl Settings {
         Ok(())
     }
     pub fn view(&self) -> serde_json::Value {
-        serde_json::json!({"workspace":self.workspace,"username":self.username,"passwordSaved":!self.password.is_empty(),"tunnel":self.tunnel,"tokenSaved":!self.tunnel_token.is_empty(),"publicUrl":self.public_url,"backend":self.backend,"network":self.network,"port":self.port,"execution":self.execution})
+        serde_json::json!({"workspace":self.workspace,"username":self.username,"passwordSaved":!self.password.is_empty(),"tunnel":self.tunnel,"tokenSaved":!self.tunnel_token.is_empty(),"publicUrl":self.public_url,"backend":self.backend,"network":self.network,"port":self.port,"execution":self.execution,"showPrompts":self.show_prompts})
     }
 }
 fn overlap(a: &Path, b: &Path) -> bool {
