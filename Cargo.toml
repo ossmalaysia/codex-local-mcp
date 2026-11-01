@@ -1,5 +1,6 @@
 [workspace]
-members = ["native/service"]
+members = ["native/service", "native/platform", "native/desktop", "native/release-tools"]
+default-members = ["native/service", "native/platform", "native/release-tools"]
 resolver = "2"
 
 [profile.release]

@@ -12,6 +12,7 @@
     <EmbeddedResource Include="$(SetupMetadata)" LogicalName="Setup.json" />
     <EmbeddedResource Include="$(SetupPayload)" LogicalName="Payload.zip" Condition="'$(SetupPayload)' != ''" />
     <EmbeddedResource Include="$(SetupUninstaller)" LogicalName="Uninstaller.exe" Condition="'$(SetupUninstaller)' != ''" />
+    <EmbeddedResource Include="$(WebViewBootstrapper)" LogicalName="WebView2.exe" Condition="'$(WebViewBootstrapper)' != ''" />
     <Reference Include="System.Security" /><Reference Include="System.Net.Http" /><Reference Include="System.IO.Compression" /><Reference Include="System.IO.Compression.FileSystem" /><Reference Include="System.Web.Extensions" />
     <Reference Include="Microsoft.CSharp" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />

@@ -1,10 +1,11 @@
-# Native service: first migration stage
+# Native Windows application
 
 The Rust service implements MCP over stdio and loopback HTTP. It runs the native Codex CLI directly.
 It does not delegate jobs or OAuth requests to Node.js.
 
-The Windows package can select this service while keeping the existing C# manager, Cloudflare setup, tray, and EXE installer.
-The manager sends credentials through redirected stdin. Production child processes receive an explicit environment allowlist.
+The Windows desktop uses Rust and Tauri 2, with a bundled TypeScript interface.
+The normal EXE installer remains a small C# program. It provides staged installation, rollback, shortcuts, and uninstall registration.
+The desktop sends service credentials through redirected stdin. Production child processes receive an explicit environment allowlist.
 Windows Job Objects terminate remaining descendants when their owner closes.
 
 ## Build and check
@@ -27,24 +28,44 @@ cargo audit
 The integration test calls no AI model and uses no live account.
 Test workspace folders remain in the temporary directory for diagnosis.
 
-## Build a Windows preview installer
+## Build a Windows installer
 
 ```powershell
-./scripts/build-windows.ps1 -Version 0.6.0 -NativeService
-./scripts/test-windows-setup.ps1 -Version 0.6.0
+node scripts/build-desktop-ui.mjs
+cargo clippy --locked -p codex-mcp-desktop --all-targets -- -D warnings
+./scripts/build-native-desktop.ps1 -Version 0.7.0
+./scripts/test-windows-setup.ps1 -Version 0.7.0
+node scripts/test-native-desktop.mjs artifacts/native-desktop-0.7.0/payload/CodexMCP.exe
 ```
 
-This produces a normal per-user setup EXE under `artifacts`.
-The manager selects Rust when `runtime/codex-mcp-service.exe` exists.
-The manifest records `service: rust`. The native executable reports the package version supplied by the build script.
-Both the setup test and installed verification check the native executable.
+This produces a normal per-user setup EXE under `artifacts`. No file copying is required from the user.
+The manifest records `service: rust` and `desktop: tauri`.
+The installer includes a Microsoft-signed WebView2 bootstrapper, used only when the runtime is missing.
+OpenAI login, DPAPI passwords, Cloudflare credentials, and owned custom hostnames use the existing data directory.
 
-The default package build still selects TypeScript. Do not reuse a native payload directory for a TypeScript-only build.
-The preview retains Node.js, Sharp, and the TypeScript fallback files for compatibility and verification.
-It therefore does not yet reduce the total package size. Removing those files requires a separate packaging transition.
+The clean setup and native ZIP contain no Node.js, Sharp, or JavaScript MCP server.
+The standard ZIP is a one-time compatibility bridge for installed C# updaters, which require legacy files.
+On first launch, the Rust app removes unchanged bridge files using an exact SHA256 inventory.
+Modified or unrelated files remain. Previous installation backups can retain old runtime files for recovery.
+Use `build-windows.ps1` only for legacy compatibility packages and tests.
 The optional MCP App view fails explicitly in Rust mode. Use the TypeScript service when that option is required.
 The obsolete `execution.taskSupport: forbidden` tool hint is omitted by rmcp 3. Tool names, descriptions, and input schemas remain checked.
 Artifact reads currently support Windows and Linux. macOS needs an opened-handle path implementation before native support is advertised.
+
+## Signed updates
+
+The desktop checks the fixed GitHub repository at startup and every 12 hours. The tray menu supports manual checks.
+A notice and an install button appear when a newer stable version is available.
+The app verifies Minisign metadata with its pinned public key, then checks the downloaded installer's signed size and SHA256.
+The user selects Install in the normal setup window. Settings and workspaces remain in place.
+Updates reject altered metadata, foreign URLs, wrong products, wrong architectures, and older versions.
+The initial compatibility update uses the installed C# updater's existing GitHub digest checks. Later updates use the pinned key.
+Update signing is separate from Windows Authenticode. The project does not have a Windows publisher certificate.
+
+Release maintainers create a private key once with `codex-mcp-release keygen native/platform/update-public-key.txt`.
+The local key is DPAPI protected. `codex-mcp-release github-secret` supplies it to the repository through stdin.
+The release workflow signs metadata using the protected `WINDOWS_UPDATE_SIGNING_KEY` secret.
+The workflow publishes a draft only after the installer and all update assets pass validation.
 
 ## Direct service use
 

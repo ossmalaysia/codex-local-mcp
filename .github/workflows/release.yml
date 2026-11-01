@@ -1,8 +1,6 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -41,7 +39,7 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm audit --audit-level=moderate
 
       - name: Build and test the exact commit being released
@@ -87,36 +85,36 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
+      - run: rustup show
       - name: Build versioned installer from the release tag
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
-        run: ./scripts/build-windows.ps1 -Version $env:RELEASE_VERSION -Release
+          WINDOWS_UPDATE_SIGNING_KEY: ${{ secrets.WINDOWS_UPDATE_SIGNING_KEY }}
+        run: ./scripts/build-native-desktop.ps1 -Version $env:RELEASE_VERSION -Release
       - name: Install, verify, and uninstall the setup executable
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: ./scripts/test-windows-setup.ps1 -Version $env:RELEASE_VERSION
-      - name: Verify the portable ZIP and update policy
+      - name: Test native OAuth, sandbox contract, and desktop UI
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
-        run: powershell.exe -NoProfile -STA -File installer/windows/test-updater.ps1 -Executable "artifacts/windows-$env:RELEASE_VERSION/payload/CodexMCP.exe" -Installer "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.zip" -Version $env:RELEASE_VERSION
-      - name: Install the Chromium test browser
-        run: npx playwright install chromium
-      - name: Test browser login against the packaged server
-        shell: pwsh
-        env:
-          RELEASE_VERSION: ${{ needs.release.outputs.version }}
-        run: node scripts/test-browser-login.mjs --bundle-root "artifacts/windows-$env:RELEASE_VERSION/payload"
+        run: |
+          cargo test --locked --all-targets
+          cargo build --locked --examples
+          node node_modules/playwright/cli.js install chromium
+          node scripts/test-native.mjs --service "artifacts/native-desktop-$env:RELEASE_VERSION/payload/runtime/codex-mcp-service.exe"
+          node scripts/test-desktop-ui.mjs
       - name: Attach installer and SHA256 to the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.release.outputs.tag }}
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
-        run: gh release upload $env:RELEASE_TAG "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64-setup.exe" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64-setup.exe.sha256" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.zip" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.zip.sha256" --clobber
+        run: gh release upload $env:RELEASE_TAG "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64-setup.exe" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64-setup.exe.sha256" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.zip" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.zip.sha256" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-native-windows-x64.zip" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-native-windows-x64.zip.sha256" "artifacts/update.json" "artifacts/update.json.minisig" --clobber
       - name: Publish the verified Windows update
         if: github.event_name == 'workflow_dispatch'
         shell: pwsh

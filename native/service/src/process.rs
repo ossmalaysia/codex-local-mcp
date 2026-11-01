@@ -62,7 +62,10 @@ pub fn command(bin: &Path) -> Command {
             cmd.env(key, value);
         }
     }
-    let mut paths = vec![bin.parent().unwrap().to_path_buf()];
+    let mut paths = vec![
+        bin.parent().unwrap().to_path_buf(),
+        bin.parent().unwrap().join("path"),
+    ];
     paths.extend(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
             .filter(|p| p.is_absolute()),

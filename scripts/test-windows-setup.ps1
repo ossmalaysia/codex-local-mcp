@@ -20,6 +20,15 @@ try {
   Write-Output "Setup install duration: $([math]::Round($watch.Elapsed.TotalSeconds,2)) seconds."
   if ((Get-Item -LiteralPath (Join-Path $target 'CodexMCP.exe')).VersionInfo.ProductVersion.Split('+')[0] -ne $Version) { throw 'Installed app version is incorrect' }
   if ((Get-ItemProperty -LiteralPath $registry).DisplayVersion -ne $Version) { throw 'Windows Installed apps version is incorrect' }
+  $manifest=Get-Content -LiteralPath (Join-Path $target 'release-manifest.json') -Raw | ConvertFrom-Json
+  if ($manifest.desktop -eq 'tauri') {
+    if (Test-Path -LiteralPath (Join-Path $target 'runtime/node/node.exe')) { throw 'Native setup must not install Node.js' }
+    if (Test-Path -LiteralPath (Join-Path $target 'app/dist/index.js')) { throw 'Native setup must not install the JavaScript server' }
+    $process=Start-Process -FilePath (Join-Path $target 'CodexMCP.exe') -ArgumentList '--health-check' -WindowStyle Hidden -Wait -PassThru
+    if ($process.ExitCode -ne 0) { throw 'Installed Rust desktop health check failed' }
+    & (Join-Path $target 'runtime/codex-mcp-service.exe') --version
+    if ($LASTEXITCODE -ne 0) { throw 'Installed Rust service health check failed' }
+  } else {
   & powershell.exe -NoProfile -STA -File (Join-Path $project 'installer/windows/test-manager.ps1') -Executable (Join-Path $target 'CodexMCP.exe')
   if ($LASTEXITCODE -ne 0) { throw 'Installed app UI checks failed' }
   & powershell.exe -NoProfile -STA -File (Join-Path $project 'installer/windows/test-accounts.ps1') -Executable (Join-Path $target 'CodexMCP.exe')
@@ -31,6 +40,7 @@ try {
   if (Test-Path -LiteralPath (Join-Path $target 'runtime/codex-mcp-service.exe')) {
     & (Join-Path $target 'runtime/node/node.exe') (Join-Path $project 'scripts/test-native.mjs') --service (Join-Path $target 'runtime/codex-mcp-service.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Installed Rust browser and execution compatibility checks failed' }
+  }
   }
   [IO.File]::WriteAllText((Join-Path $target 'user-notes.txt'),'test user file; uninstall must preserve it')
 } finally {

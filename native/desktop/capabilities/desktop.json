@@ -1,0 +1,25 @@
+{
+  "identifier": "desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "notification:default",
+    "allow-state",
+    "allow-save-settings",
+    "allow-generate-password",
+    "allow-copy-password",
+    "allow-account-status",
+    "allow-account-login",
+    "allow-sandbox-check",
+    "allow-start-connection",
+    "allow-stop-connection",
+    "allow-open-workspace",
+    "allow-open-claude",
+    "allow-cloudflare-status",
+    "allow-cloudflare-login",
+    "allow-cloudflare-create",
+    "allow-check-update",
+    "allow-install-update"
+  ]
+}

@@ -1,6 +1,7 @@
 # Rust migration proposal
 
-Status: first native service stage implemented as an opt-in preview. See [implementation status](../native/README.md).
+Status: the Windows service, Tauri desktop, credential migration, signed updater, and normal installer are implemented.
+See [implementation and build details](../native/README.md). The sections below preserve the design rationale.
 Date: 2026-11-01.
 
 ## Recommendation

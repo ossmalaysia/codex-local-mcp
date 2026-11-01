@@ -1,7 +1,30 @@
-# Native service preview validation
+# Native Windows validation
 
-Date: 2026-11-01. Platform: Windows x64. Preview package version: 0.6.0.
-This is the first migration stage. It is not a stable-channel release.
+Date: 2026-11-01. Platform: Windows x64. Native desktop package version: 0.7.0.
+
+## Desktop and update transition
+
+- The Rust/Tauri desktop compiles with strict TypeScript checks and Clippy warnings treated as errors.
+- Eighteen Rust tests cover the service, DPAPI compatibility, bounded child output, migration paths, and signed update metadata.
+- Signature tests reject changed metadata, another signing key, older versions, unexpected versions, and foreign installer URLs.
+- Chromium checks cover saved account details, saved passwords, saved hostnames, live activity, update notices, errors, and minimum window width.
+- The actual packaged WebView2 app passed account status, password generation, encrypted settings, restricted IPC, and an MXC sandbox check.
+- The normal setup installed in an isolated target in 7.54 seconds with WebView2 already present.
+- Setup checked application and Installed apps versions. Uninstall preserved settings and an unrelated file.
+- The user's installed 0.5.0 updater verified and swapped the 0.7.0 compatibility ZIP in a separate test folder.
+- The upgraded Rust app then removed the unchanged Node runtime and passed the actual WebView2 and MXC checks.
+- The clean installer contains no Node runtime, Sharp, or TypeScript MCP server.
+- Pinned Codex 0.166.0 uses its native code-mode host with an embedded V8 runtime. The native host remains bundled.
+- npm audit found no vulnerabilities. Cargo audit found no vulnerability advisories after an unused ZIP dependency was removed.
+- Cargo audit reports maintenance warnings and a GLib warning in dependencies for unsupported Linux desktop builds. Windows does not build GLib.
+
+The application update key is pinned in source. Its local private key uses DPAPI; the release workflow uses a GitHub Actions secret.
+This is update-package signing, not Windows Authenticode publisher signing.
+The clean installer embeds a Microsoft-signed WebView2 bootstrapper. The missing-runtime installation branch was inspected, not tested on a clean Windows image.
+Local Linux cross-compilation of the new desktop support library lacks a Linux C compiler. Native Linux service checks remain in CI.
+No model generation call was used for the migration tests.
+
+## Service checks retained from the first stage
 
 ## Passed checks
 
@@ -47,10 +70,11 @@ An earlier run had a slower Rust p95. The native runtime now limits worker and b
 Do not treat these measurements as a remote generation speed claim or a general performance guarantee.
 Use `scripts/benchmark-native.mjs` to repeat the measurement.
 
-## Remaining release gates
+## Runtime boundaries
 
-The user's existing Claude connector was not changed during this preview test.
-An actual Claude session, the elevated sandbox backend, and Windows machines without the same runtime state need release validation.
-The C# interface, existing update trust, Node fallback package files, and in-process image worker remain in this stage.
-Tauri, independent signed updates, final Node removal, and persistent OAuth sessions are not included.
+The user's running Claude connector was not replaced during isolated desktop tests.
+Restarting the service clears in-memory OAuth grants. Reconnect the Claude connector after the application update.
+The alternate restricted-token sandbox remains dependent on the Windows device policy. The local desktop test used MXC.
+Image decoding uses a bounded worker thread in the service. It is not a separate sandbox process.
+The optional MCP App view is not supported by the Rust service. Standard image content and resource links are supported.
 See [native implementation status](../native/README.md) for the supported options and remaining boundaries.
