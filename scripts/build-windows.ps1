@@ -88,15 +88,24 @@ function FileId([string]$Value) {
 $components = New-Object System.Collections.Generic.List[string]
 function DirectoryXml([string]$Directory, [string]$Relative) {
   $result = New-Object Text.StringBuilder
-  foreach ($file in Get-ChildItem -LiteralPath $Directory -File | Sort-Object Name) {
+  $files = @(Get-ChildItem -LiteralPath $Directory -File | Sort-Object Name)
+  # JavaScript package files share a directory component. Thousands of registry
+  # keypath components make Windows Installer validation and removal needlessly slow.
+  # A membership change creates a new GUID; major upgrades remove the old product first.
+  $componentId = FileId ('directory/' + $Relative)
+  $membership = $Relative + ':' + (($files | ForEach-Object Name) -join '|')
+  $guidHash = FileId $membership
+  $componentGuid = [Guid]::ParseExact(($guidHash.Substring(1) + '00'), 'N').ToString()
+  [void]$result.Append('<Component Id="C' + $componentId + '" Guid="' + $componentGuid + '">')
+  foreach ($file in $files) {
     $relativeFile = ($Relative + '/' + $file.Name).TrimStart('/')
     $id = FileId $relativeFile
-    $componentGuid = [Guid]::ParseExact(($id.Substring(1) + '00'), 'N').ToString()
     $fileKey = if ($relativeFile -eq 'CodexMCP.exe') { 'ManagerExe' } else { $id }
     $shortcut = if ($relativeFile -eq 'CodexMCP.exe') { '<Shortcut Id="ManagerShortcut" Directory="ProgramMenuDir" Name="Codex Local MCP" WorkingDirectory="INSTALLFOLDER" Advertise="no" />' } else { '' }
-    [void]$result.Append('<Component Id="C' + $id + '" Guid="' + $componentGuid + '"><File Id="' + $fileKey + '" Source="' + (Xml $file.FullName) + '">' + $shortcut + '</File><RegistryValue Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP\Files" Name="' + $id + '" Value="1" Type="integer" KeyPath="yes" /></Component>')
-    $components.Add('<ComponentRef Id="C' + $id + '" />')
+    [void]$result.Append('<File Id="' + $fileKey + '" Source="' + (Xml $file.FullName) + '">' + $shortcut + '</File>')
   }
+  [void]$result.Append('<RemoveFolder Id="R' + $componentId + '" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP\Files" Name="' + $componentId + '" Value="1" Type="integer" KeyPath="yes" /></Component>')
+  $components.Add('<ComponentRef Id="C' + $componentId + '" />')
   foreach ($child in Get-ChildItem -LiteralPath $Directory -Directory | Sort-Object Name) {
     $relativeChild = ($Relative + '/' + $child.Name).TrimStart('/')
     [void]$result.Append('<Directory Id="D' + (FileId $relativeChild) + '" Name="' + (Xml $child.Name) + '">' + (DirectoryXml $child.FullName $relativeChild) + '</Directory>')
@@ -110,6 +119,7 @@ $wxs = @"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
  <Package Name="Codex Local MCP" Manufacturer="OSS Malaysia" Version="$Version" UpgradeCode="2A3FA1B7-14D8-4DC8-978B-A0404A81D823" Scope="perUser">
   <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+  <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
   <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
   <StandardDirectory Id="LocalAppDataFolder"><Directory Id="ProgramsFolder" Name="Programs"><Directory Id="INSTALLFOLDER" Name="Codex Local MCP">$tree</Directory></Directory></StandardDirectory>
   <StandardDirectory Id="ProgramMenuFolder"><Directory Id="ProgramMenuDir" Name="Codex Local MCP"><Component Id="MenuCleanup" Guid="*"><RemoveFolder Id="RemoveMenu" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP" Name="Menu" Value="1" Type="integer" KeyPath="yes" /></Component></Directory></StandardDirectory>
