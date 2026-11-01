@@ -66,6 +66,8 @@ These are inherent to what the tool is, not bugs:
   Successful checks are cached for 30 seconds. This does not verify credentials with OpenAI.
 - **Restart revokes remote access.** Clients, authorization codes, and tokens are held in bounded memory stores.
   Clients must register and sign in again after a restart.
+  The Windows native service instead saves clients and SHA-256 token fingerprints in its private directory,
+  for a 30-day sign-in that survives updates. A changed username, password, or origin discards them.
 - **Tunnel activation is explicit.** `npm run start:tunnel` or `CODEX_MCP_TUNNEL=quick` publishes the OAuth-protected service.
   The connector targets IPv4 loopback. Activation waits for a public URL and an established connection.
   The server closes its listener if the connector exits. Shutdown stops both processes.

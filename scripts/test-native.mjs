@@ -70,18 +70,29 @@ try {
   let origin = `http://127.0.0.1:${port}`;
   const liveTunnel = process.argv.includes('--tunnel');
   let logs = '';
-  const managedEnv = { ...env, CODEX_MCP_PORT: String(port), CODEX_MCP_PUBLIC_URL: origin };
+  // OAuth sessions are saved here so a restart can be tested like an update.
+  const privateRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-native-private-'));
+  const managedEnv = { ...env, CODEX_MCP_PORT: String(port), CODEX_MCP_PUBLIC_URL: origin, CODEX_PRIVATE_ROOT: privateRoot };
   delete managedEnv.CODEX_MCP_PASSWORD; delete managedEnv.CODEX_MCP_TUNNEL_TOKEN;
-  server = spawn(bin, [liveTunnel ? '--tunnel' : '--http', '--managed', '--secrets-stdin'], { env: { ...managedEnv, CODEX_MCP_TUNNEL: 'quick' }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  server.stdin.write(JSON.stringify({ password, tunnelToken: 'private-fixture-token' }) + '\n');
-  server.stderr.on('data', b => { logs += b.toString(); });
-  server.stdout.resume();
-  for (let i = 0; i < (liveTunnel ? 1200 : 200); i++) {
-    if (server.exitCode !== null) throw new Error(`Native server exited: ${logs}`);
-    if (logs.includes('codex-local-mcp ready:')) break;
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  assert.match(logs, /codex-local-mcp ready:/);
+  const startServer = async () => {
+    logs = '';
+    server = spawn(bin, [liveTunnel ? '--tunnel' : '--http', '--managed', '--secrets-stdin'], { env: { ...managedEnv, CODEX_MCP_TUNNEL: 'quick' }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    server.stdin.write(JSON.stringify({ password, tunnelToken: 'private-fixture-token' }) + '\n');
+    server.stderr.on('data', b => { logs += b.toString(); });
+    server.stdout.resume();
+    for (let i = 0; i < (liveTunnel ? 1200 : 200); i++) {
+      if (server.exitCode !== null) throw new Error(`Native server exited: ${logs}`);
+      if (logs.includes('codex-local-mcp ready:')) break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.match(logs, /codex-local-mcp ready:/);
+  };
+  const stopServer = async () => {
+    server.stdin.end('stop\n');
+    await Promise.race([new Promise(resolve => server.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 5000))]);
+    if (server.exitCode === null) server.kill();
+  };
+  await startServer();
   if (liveTunnel) origin = new URL(/codex-local-mcp ready: (https:\/\/\S+) \(OAuth/.exec(logs)[1]).origin;
   if (liveTunnel) {
     let reachable = false;
@@ -147,15 +158,25 @@ try {
   assert.ok(passed); assert.deepEqual(origins, [origin, origin]); assert.deepEqual(cspErrors, []);
   const refreshParams = { client_id, grant_type: 'refresh_token', refresh_token: tokens[0].refresh_token, resource: `${origin}/mcp` };
   const rotate = await fetch(`${origin}/token`, { method: 'POST', body: new URLSearchParams(refreshParams) }); assert.equal(rotate.status, 200); const rotated = await rotate.json();
-  assert.equal((await fetch(`${origin}/token`, { method: 'POST', body: new URLSearchParams(refreshParams) })).status, 400);
-  for (const token of [tokens[0].access_token, rotated.access_token]) {
-    assert.equal((await fetch(`${origin}/mcp`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })).status, 401, 'Reuse did not revoke the token family');
+  const authorized = async token => (await fetch(`${origin}/mcp`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json' }, body: '{}' })).status !== 401;
+  let restored = rotated;
+  if (!liveTunnel) {
+    // A restart, as during an update, keeps the sign-in and the rotation state.
+    await stopServer(); await startServer();
+    assert.ok(await authorized(rotated.access_token), 'Access token was lost on restart');
+    const again = await fetch(`${origin}/token`, { method: 'POST', body: new URLSearchParams({ ...refreshParams, refresh_token: rotated.refresh_token }) });
+    assert.equal(again.status, 200, 'Refresh token was lost on restart'); restored = await again.json();
+    assert.ok(!(await fs.readFile(path.join(privateRoot, 'oauth-sessions.json'), 'utf8')).includes(restored.refresh_token), 'A raw token was saved');
   }
-  console.log('Native HTTP and Chromium passed: password retry, native form Origin, callback CSP, PKCE, one-use code, SDK client, remote job, refresh rotation, and family revocation.');
+  assert.equal((await fetch(`${origin}/token`, { method: 'POST', body: new URLSearchParams(refreshParams) })).status, 400);
+  for (const token of [tokens[0].access_token, rotated.access_token, restored.access_token]) {
+    assert.equal(await authorized(token), false, 'Reuse did not revoke the token family');
+  }
+  console.log('Native HTTP and Chromium passed: password retry, native form Origin, callback CSP, PKCE, one-use code, SDK client, remote job, refresh rotation, restart persistence, and family revocation.');
 } finally {
   await browser?.close();
   for (const client of clients) { try { await client.close(); } catch {} }
-  if (server) { server.stdin.end('stop\n'); await Promise.race([new Promise(resolve => server.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 5000))]); if (server.exitCode === null) server.kill(); }
+  if (server && server.exitCode === null) { server.stdin.end('stop\n'); await Promise.race([new Promise(resolve => server.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 5000))]); if (server.exitCode === null) server.kill(); }
   await close(callback);
   // This fixture owns root. Leave it for diagnosis on failure; do not touch user workspaces.
 }

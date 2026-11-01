@@ -75,7 +75,10 @@ HTTP requires a loopback listener, a configured public origin, and a saved MCP l
 Only public OAuth clients with `token_endpoint_auth_method: none` are accepted.
 OpenAI login remains separate from MCP login.
 The server validates Codex login at startup and caches successful request checks for 30 seconds.
-OAuth state remains in memory. Restarting requires a fresh connector login.
+OAuth sessions are saved to `oauth-sessions.json` in `CODEX_PRIVATE_ROOT`, so a restart or update keeps Claude signed in.
+The file holds registered clients and SHA-256 token fingerprints, never tokens. Sandbox commands cannot read that directory.
+A sign-in lasts 30 days, and refresh tokens rotate within it. A changed username, password, or public origin discards saved sessions.
+Without `CODEX_PRIVATE_ROOT`, OAuth state stays in memory and a restart requires a fresh connector login.
 
 ```powershell
 ./target/release/codex-mcp-service.exe --http

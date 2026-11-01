@@ -7,12 +7,14 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
@@ -20,6 +22,8 @@ use url::Url;
 use zeroize::Zeroize;
 
 pub const SCOPE: &str = "codex:access";
+/// How long one Claude sign-in lasts. Refresh tokens rotate within it.
+const SESSION: Duration = Duration::from_secs(30 * 86400);
 fn random() -> String {
     let mut bytes = [0; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
@@ -91,6 +95,7 @@ struct Pending {
     name: String,
 }
 struct Family {
+    id: String,
     client: String,
     expires: Instant,
     revoked: bool,
@@ -118,10 +123,71 @@ pub struct Auth {
     stores: Mutex<Stores>,
     hashes: Arc<Semaphore>,
     rates: Mutex<HashMap<&'static str, (Instant, usize)>>,
+    sessions: Option<PathBuf>,
+}
+
+// Sessions survive a service restart, such as an update, so Claude does not
+// have to sign in again. Only token fingerprints are written, never tokens,
+// and the file lives in the private directory that sandbox commands cannot
+// read. A changed username, password, or public origin discards it.
+#[derive(Serialize, Deserialize)]
+struct Saved {
+    origin: String,
+    username: String,
+    salt: String,
+    check: String,
+    clients: HashMap<String, SavedClient>,
+    families: HashMap<String, SavedFamily>,
+    tokens: Vec<SavedToken>,
+}
+#[derive(Serialize, Deserialize)]
+struct SavedClient {
+    name: String,
+    redirects: Vec<String>,
+    expires: u64,
+}
+#[derive(Serialize, Deserialize)]
+struct SavedFamily {
+    client: String,
+    expires: u64,
+}
+#[derive(Serialize, Deserialize)]
+struct SavedToken {
+    key: String,
+    family: String,
+    refresh: bool,
+    used: bool,
+    expires: u64,
+}
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+fn to_unix(at: Instant) -> u64 {
+    now_unix() + at.saturating_duration_since(Instant::now()).as_secs()
+}
+fn from_unix(at: u64) -> Option<Instant> {
+    at.checked_sub(now_unix())
+        .filter(|s| *s > 0)
+        .map(|s| Instant::now() + Duration::from_secs(s))
+}
+fn check(hash: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(hash))
 }
 
 impl Auth {
-    pub fn new(public: Url, username: String, mut password: String) -> Result<Arc<Self>> {
+    #[cfg(test)]
+    pub fn new(public: Url, username: String, password: String) -> Result<Arc<Self>> {
+        Self::with_sessions(public, username, password, None)
+    }
+    /// Like `new`, and keeps Claude's sessions in `path` across restarts.
+    pub fn with_sessions(
+        public: Url,
+        username: String,
+        mut password: String,
+        path: Option<PathBuf>,
+    ) -> Result<Arc<Self>> {
         ensure!(
             public.path() == "/"
                 && public.query().is_none()
@@ -142,8 +208,22 @@ impl Auth {
                 && password.len() <= 1024,
             "MCP login requires a username and a password of 24 characters to 1024 bytes"
         );
+        let origin = public.origin().ascii_serialization();
+        let saved = path
+            .as_ref()
+            .filter(|p| p.metadata().is_ok_and(|m| m.len() < 8_000_000))
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice::<Saved>(&b).ok())
+            .filter(|s| s.origin == origin && s.username == username);
+        // Reusing the saved salt is what lets a restart recognise the same password.
         let mut salt = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut salt);
+        match saved
+            .as_ref()
+            .and_then(|s| URL_SAFE_NO_PAD.decode(&s.salt).ok())
+        {
+            Some(bytes) if bytes.len() == 32 => salt.copy_from_slice(&bytes),
+            _ => rand::rngs::OsRng.fill_bytes(&mut salt),
+        }
         let mut hash = [0u8; 64];
         scrypt::scrypt(
             password.as_bytes(),
@@ -152,17 +232,89 @@ impl Auth {
             &mut hash,
         )?;
         password.zeroize();
-        Ok(Arc::new(Self {
-            origin: public.origin().ascii_serialization(),
+        let mut stores = Stores::default();
+        if let Some(saved) =
+            saved.filter(|s| bool::from(s.check.as_bytes().ct_eq(check(&hash).as_bytes())))
+        {
+            restore(&mut stores, saved);
+        }
+        let auth = Arc::new(Self {
+            origin,
             resource: public.join("mcp")?.into(),
             secure: public.scheme() == "https",
             username,
             salt,
             password: hash,
-            stores: Mutex::new(Stores::default()),
+            stores: Mutex::new(stores),
             hashes: Arc::new(Semaphore::new(2)),
             rates: Mutex::new(HashMap::new()),
-        }))
+            sessions: path,
+        });
+        // Records the new binding at once, so stale sessions cannot load later.
+        auth.save(&auth.stores.lock().unwrap());
+        Ok(auth)
+    }
+    fn save(&self, stores: &Stores) {
+        let Some(path) = &self.sessions else {
+            return;
+        };
+        let now = Instant::now();
+        let mut families = HashMap::new();
+        let mut tokens = Vec::new();
+        for (store, refresh) in [(&stores.access, false), (&stores.refresh, true)] {
+            for (key, entry) in &store.0 {
+                let family = entry.value.family.lock().unwrap();
+                if family.revoked || family.expires <= now || entry.expires <= now {
+                    continue;
+                }
+                families
+                    .entry(family.id.clone())
+                    .or_insert_with(|| SavedFamily {
+                        client: family.client.clone(),
+                        expires: to_unix(family.expires),
+                    });
+                tokens.push(SavedToken {
+                    key: key.clone(),
+                    family: family.id.clone(),
+                    refresh,
+                    used: entry.value.used,
+                    expires: to_unix(entry.expires),
+                });
+            }
+        }
+        let saved = Saved {
+            origin: self.origin.clone(),
+            username: self.username.clone(),
+            salt: URL_SAFE_NO_PAD.encode(self.salt),
+            check: check(&self.password),
+            clients: stores
+                .clients
+                .0
+                .iter()
+                .filter(|(_, e)| e.expires > now)
+                .map(|(id, e)| {
+                    (
+                        id.clone(),
+                        SavedClient {
+                            name: e.value.name.clone(),
+                            redirects: e.value.redirects.clone(),
+                            expires: to_unix(e.expires),
+                        },
+                    )
+                })
+                .collect(),
+            families,
+            tokens,
+        };
+        let temporary = path.with_extension("tmp");
+        let written = serde_json::to_vec(&saved)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| Ok(std::fs::write(&temporary, bytes)?))
+            .and_then(|()| Ok(std::fs::rename(&temporary, path)?));
+        if let Err(e) = written {
+            // Not prefixed "codex-local-mcp:", which the desktop treats as a fatal status.
+            eprintln!("OAuth sessions were not saved: {e}");
+        }
     }
     fn rate(&self, key: &'static str, max: usize) -> bool {
         let mut rates = self.rates.lock().unwrap();
@@ -193,6 +345,46 @@ impl Auth {
             if clear { 0 } else { 600 },
             if self.secure { "; Secure" } else { "" }
         )
+    }
+}
+
+fn restore(stores: &mut Stores, saved: Saved) {
+    for (id, c) in saved.clients {
+        if let Some(expires) = from_unix(c.expires) {
+            let value = Client {
+                name: c.name,
+                redirects: c.redirects,
+            };
+            stores.clients.0.insert(id, Entry { value, expires });
+        }
+    }
+    let families: HashMap<_, _> = saved
+        .families
+        .into_iter()
+        .filter_map(|(id, f)| {
+            let family = Family {
+                id: id.clone(),
+                client: f.client,
+                expires: from_unix(f.expires)?,
+                revoked: false,
+            };
+            Some((id, Arc::new(Mutex::new(family))))
+        })
+        .collect();
+    for t in saved.tokens.into_iter().take(8000) {
+        let (Some(family), Some(expires)) = (families.get(&t.family), from_unix(t.expires)) else {
+            continue;
+        };
+        let value = Token {
+            family: family.clone(),
+            used: t.used,
+        };
+        let store = if t.refresh {
+            &mut stores.refresh
+        } else {
+            &mut stores.access
+        };
+        store.0.insert(t.key, Entry { value, expires });
     }
 }
 
@@ -288,15 +480,12 @@ pub async fn register(State(auth): State<Arc<Auth>>, Json(body): Json<Value>) ->
         name: name.into(),
         redirects: uris.clone(),
     };
-    if auth
-        .stores
-        .lock()
-        .unwrap()
-        .clients
-        .put(id.clone(), client, Duration::from_secs(30 * 86400))
-        .is_err()
     {
-        return limited();
+        let mut stores = auth.stores.lock().unwrap();
+        if stores.clients.put(id.clone(), client, SESSION).is_err() {
+            return limited();
+        }
+        auth.save(&stores);
     }
     (StatusCode::CREATED, Json(json!({"client_id":id,"client_name":name,"redirect_uris":uris,"token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}))).into_response()
 }
@@ -532,11 +721,16 @@ pub async fn token(
                 return invalid("invalid_grant", "PKCE or redirect URI does not match");
             }
             stores.codes.take(&key);
+            // A new sign-in keeps its client registered for the whole session.
+            if let Some(registered) = stores.clients.get(&client) {
+                let _ = stores.clients.put(client.clone(), registered, SESSION);
+            }
             issue(
                 &mut stores,
                 Arc::new(Mutex::new(Family {
+                    id: random(),
                     client,
-                    expires: Instant::now() + Duration::from_secs(86400),
+                    expires: Instant::now() + SESSION,
                     revoked: false,
                 })),
             )
@@ -564,6 +758,8 @@ pub async fn token(
                 }
                 if token.used {
                     family.revoked = true;
+                    drop(family);
+                    auth.save(&stores);
                     return invalid(
                         "invalid_grant",
                         "Refresh token reuse detected. Sign in again",
@@ -576,7 +772,10 @@ pub async fn token(
         _ => return invalid("unsupported_grant_type", "Unsupported grant type"),
     };
     match result {
-        Ok(value) => Json(value).into_response(),
+        Ok(value) => {
+            auth.save(&stores);
+            Json(value).into_response()
+        }
         Err(_) => limited(),
     }
 }
@@ -594,6 +793,8 @@ pub async fn revoke(
         let mut family = token.family.lock().unwrap();
         if params.get("client_id") == Some(&family.client) {
             family.revoked = true;
+            drop(family);
+            auth.save(&stores);
         }
     }
     StatusCode::OK.into_response()
@@ -642,6 +843,7 @@ mod tests {
         )
         .unwrap();
         let family = Arc::new(Mutex::new(Family {
+            id: "f".into(),
             client: "a".into(),
             expires: Instant::now() + Duration::from_secs(100),
             revoked: false,
@@ -651,6 +853,103 @@ mod tests {
         assert!(auth.valid_access(access));
         family.lock().unwrap().revoked = true;
         assert!(!auth.valid_access(access));
+    }
+    fn signed_in(path: &std::path::Path, password: &str) -> (Arc<Auth>, Value) {
+        let auth = Auth::with_sessions(
+            Url::parse("https://codex.example.com").unwrap(),
+            "admin".into(),
+            password.into(),
+            Some(path.into()),
+        )
+        .unwrap();
+        let mut stores = auth.stores.lock().unwrap();
+        let client = Client {
+            name: "Claude".into(),
+            redirects: vec!["https://claude.ai/api/mcp/auth_callback".into()],
+        };
+        stores
+            .clients
+            .put("client".into(), client, SESSION)
+            .unwrap();
+        let family = Arc::new(Mutex::new(Family {
+            id: random(),
+            client: "client".into(),
+            expires: Instant::now() + SESSION,
+            revoked: false,
+        }));
+        let tokens = issue(&mut stores, family).unwrap();
+        auth.save(&stores);
+        drop(stores);
+        (auth, tokens)
+    }
+    fn restarted(path: &std::path::Path, password: &str, origin: &str) -> Arc<Auth> {
+        Auth::with_sessions(
+            Url::parse(origin).unwrap(),
+            "admin".into(),
+            password.into(),
+            Some(path.into()),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn sessions_survive_a_restart_with_the_same_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("oauth-sessions.json");
+        let password = "test-only-password-long-enough";
+        let (_, tokens) = signed_in(&path, password);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        for name in ["access_token", "refresh_token"] {
+            assert!(!saved.contains(tokens[name].as_str().unwrap()));
+        }
+        let auth = restarted(&path, password, "https://codex.example.com");
+        assert!(auth.valid_access(tokens["access_token"].as_str().unwrap()));
+        let stores = auth.stores.lock().unwrap();
+        assert!(stores.clients.get("client").is_some());
+        let refresh = fingerprint(tokens["refresh_token"].as_str().unwrap());
+        assert!(stores.refresh.get(&refresh).is_some_and(|t| !t.used));
+    }
+    #[test]
+    fn sessions_end_when_the_login_or_address_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("oauth-sessions.json");
+        let password = "test-only-password-long-enough";
+        let (_, tokens) = signed_in(&path, password);
+        let access = tokens["access_token"].as_str().unwrap();
+        let changed = restarted(
+            &path,
+            "a-different-password-long-enough",
+            "https://codex.example.com",
+        );
+        assert!(!changed.valid_access(access));
+        assert!(
+            changed
+                .stores
+                .lock()
+                .unwrap()
+                .clients
+                .get("client")
+                .is_none()
+        );
+        // The new binding was saved, so the old password cannot bring them back.
+        assert!(!restarted(&path, password, "https://codex.example.com").valid_access(access));
+        let (_, tokens) = signed_in(&path, password);
+        let moved = restarted(&path, password, "https://other.example.com");
+        assert!(!moved.valid_access(tokens["access_token"].as_str().unwrap()));
+    }
+    #[test]
+    fn revoked_sessions_are_not_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("oauth-sessions.json");
+        let password = "test-only-password-long-enough";
+        let (auth, tokens) = signed_in(&path, password);
+        let access = tokens["access_token"].as_str().unwrap();
+        {
+            let stores = auth.stores.lock().unwrap();
+            let token = stores.access.get(&fingerprint(access)).unwrap();
+            token.family.lock().unwrap().revoked = true;
+            auth.save(&stores);
+        }
+        assert!(!restarted(&path, password, "https://codex.example.com").valid_access(access));
     }
     #[test]
     fn store_expiration_and_single_use() {

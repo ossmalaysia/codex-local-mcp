@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-desktop"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "clipboard-win",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-platform"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-release"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "codex-mcp-platform",
