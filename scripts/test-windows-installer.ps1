@@ -18,6 +18,10 @@ try {
   if ($appVersion -notlike "$Version*") { throw 'Windows executable has the wrong version' }
   $selfTest = Start-Process -FilePath (Join-Path $target 'CodexMCP.exe') -ArgumentList '--self-test' -WindowStyle Hidden -Wait -PassThru
   if ($selfTest.ExitCode -ne 0) { throw "Manager self-test failed: $($selfTest.ExitCode)" }
+  & powershell.exe -NoProfile -STA -File (Join-Path $projectRoot 'installer/windows/test-manager.ps1') -Executable (Join-Path $target 'CodexMCP.exe')
+  if ($LASTEXITCODE -ne 0) { throw 'Installed manager UI checks failed' }
+  & powershell.exe -NoProfile -STA -File (Join-Path $projectRoot 'installer/windows/test-updater.ps1') -Executable (Join-Path $target 'CodexMCP.exe') -Installer $msi -Version $Version
+  if ($LASTEXITCODE -ne 0) { throw 'Installed updater security checks failed' }
   & (Join-Path $target 'runtime/node/node.exe') --version
   if ($LASTEXITCODE -ne 0) { throw 'Bundled Node failed' }
   & (Join-Path $target 'runtime/codex/codex.exe') --version

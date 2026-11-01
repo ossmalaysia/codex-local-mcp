@@ -68,4 +68,7 @@ jobs:
         run: ./scripts/build-windows.ps1 -Version 0.0.1
       - name: Install, verify, and uninstall
         shell: pwsh
-        run: ./scripts/test-windows-installer.ps1 -Version 0.0.1
+        run: ./scripts/test-windows-setup.ps1 -Version 0.0.1
+      - name: Test Cloudflare setup security
+        shell: pwsh
+        run: powershell.exe -NoProfile -File installer/windows/test-cloudflare.ps1 -Executable artifacts/windows-0.0.1/payload/CodexMCP.exe

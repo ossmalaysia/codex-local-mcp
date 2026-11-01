@@ -1,6 +1,9 @@
 param(
   [Parameter(Mandatory=$true)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
-  [switch]$Release
+  [switch]$Release,
+  [switch]$PortableOnly,
+  [switch]$LegacyMsi,
+  [ValidateSet('high','mszip')][string]$CompressionLevel = 'high'
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -63,8 +66,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Production dependency security audit failed' }
 $package = Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json
 $package.version = $Version
 $package | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $app 'package.json') -Encoding utf8
+& $node scripts/bundle-windows.mjs $payload
+if ($LASTEXITCODE -ne 0) { throw 'Desktop server bundling failed' }
 Copy-Item -LiteralPath 'LICENSE','README.md','SECURITY.md' -Destination $payload -Force
-Copy-Item -LiteralPath 'installer/windows/verify-installed.mjs' -Destination $payload -Force
 $managerOutput = Join-Path $payload 'manager-build'
 & dotnet build installer/windows/Manager/Manager.csproj -c Release "-p:Version=$Version" "-p:FileVersion=$Version.0" "-p:AssemblyVersion=$Version.0" -o $managerOutput --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Windows manager build failed' }
@@ -72,6 +76,23 @@ Get-ChildItem -LiteralPath $managerOutput -File | ForEach-Object { Move-Item -Li
 Remove-Item -LiteralPath $managerOutput
 $manifest = @{ product='codex-local-mcp'; version=$Version; commit=$sha; release=[bool]$Release; architecture='x64'; node=$dependencies.node; cloudflared=$dependencies.cloudflared; codex=$dependencies.codex; codexIntegrity=$packed.integrity; sandbox='isolated'; defaultWindowsSandbox='mxc'; defaultCommandNetworking=$false }
 $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $payload 'release-manifest.json') -Encoding utf8
+$zip = Join-Path $artifactsRoot "CodexLocalMCP-$Version-windows-x64.zip"
+if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression
+$archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
+try {
+  foreach ($file in Get-ChildItem -LiteralPath $payload -Recurse -File) {
+    $entry = $file.FullName.Substring($payload.TrimEnd('\').Length + 1).Replace('\','/')
+    [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entry, [IO.Compression.CompressionLevel]::Fastest) | Out-Null
+  }
+} finally { $archive.Dispose() }
+$zipDigest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.File]::WriteAllText(($zip + '.sha256'), ($zipDigest + '  ' + (Split-Path -Leaf $zip) + "`n"), (New-Object Text.UTF8Encoding($false)))
+Write-Output "Portable package built: $zip"
+if ($PortableOnly) { return }
+& (Join-Path $PSScriptRoot 'build-setup.ps1') -Version $Version -Payload $payload -Package $zip
+if (!$LegacyMsi) { return }
 $wix = Join-Path $cache 'wix5/wix.exe'
 if (!(Test-Path -LiteralPath $wix)) {
   & dotnet tool install --tool-path (Join-Path $cache 'wix5') wix --version $dependencies.wix
@@ -101,7 +122,7 @@ function DirectoryXml([string]$Directory, [string]$Relative) {
     $relativeFile = ($Relative + '/' + $file.Name).TrimStart('/')
     $id = FileId $relativeFile
     $fileKey = if ($relativeFile -eq 'CodexMCP.exe') { 'ManagerExe' } else { $id }
-    $shortcut = if ($relativeFile -eq 'CodexMCP.exe') { '<Shortcut Id="ManagerShortcut" Directory="ProgramMenuDir" Name="Codex Local MCP" WorkingDirectory="INSTALLFOLDER" Advertise="no" />' } else { '' }
+    $shortcut = if ($relativeFile -eq 'CodexMCP.exe') { '<Shortcut Id="ManagerShortcut" Directory="ProgramMenuDir" Name="Codex Local MCP" WorkingDirectory="INSTALLFOLDER" Advertise="no" Icon="AppIcon" IconIndex="0" />' } else { '' }
     [void]$result.Append('<File Id="' + $fileKey + '" Source="' + (Xml $file.FullName) + '">' + $shortcut + '</File>')
   }
   [void]$result.Append('<RemoveFolder Id="R' + $componentId + '" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP\Files" Name="' + $componentId + '" Value="1" Type="integer" KeyPath="yes" /></Component>')
@@ -124,9 +145,11 @@ $wxs = @"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
  <Package Name="Codex Local MCP" Manufacturer="OSS Malaysia" Version="$Version" UpgradeCode="2A3FA1B7-14D8-4DC8-978B-A0404A81D823" Scope="perUser">
   <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+  <Icon Id="AppIcon" SourceFile="$(Xml (Join-Path $projectRoot 'installer/windows/Manager/Assets/app.ico'))" />
+  <Property Id="ARPPRODUCTICON" Value="AppIcon" />
   <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
   <Property Id="INSTALLFOLDER"><RegistrySearch Id="PreviousInstallLocation" Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP" Name="InstallLocation" Type="raw" /></Property>
-  <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+  <MediaTemplate EmbedCab="yes" CompressionLevel="$CompressionLevel" />
   <StandardDirectory Id="LocalAppDataFolder"><Directory Id="ProgramsFolder" Name="Programs"><Directory Id="INSTALLFOLDER" Name="Codex Local MCP">$tree</Directory></Directory></StandardDirectory>
   <StandardDirectory Id="ProgramMenuFolder"><Directory Id="ProgramMenuDir" Name="Codex Local MCP"><Component Id="MenuCleanup" Guid="*"><RemoveFolder Id="RemoveMenu" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP" Name="Menu" Value="1" Type="integer" KeyPath="yes" /></Component></Directory></StandardDirectory>
   <Feature Id="Main" Title="Codex Local MCP" Level="1">$($components -join '')<ComponentRef Id="MenuCleanup" /></Feature>
