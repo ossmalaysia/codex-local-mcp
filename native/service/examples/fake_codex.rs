@@ -35,13 +35,29 @@ fn main() {
     if prompt.contains("FAKE_DELAY") {
         std::thread::sleep(std::time::Duration::from_millis(1200));
     }
+    let millis = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    };
+    // Records when this run was active, so a test can prove runs overlap.
+    if prompt.contains("FAKE_PARALLEL") {
+        let start = millis();
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        std::fs::create_dir_all(dir.join("runs")).unwrap();
+        let record = format!("runs/{}.txt", std::process::id());
+        std::fs::write(dir.join(record), format!("{start} {}", millis())).unwrap();
+    }
     if prompt.contains("FAKE_FAILURE") {
         std::process::exit(7);
     }
     if prompt.contains("Generate an image:") {
         std::fs::create_dir_all(dir.join("output")).unwrap();
+        // Parallel runs share the workspace, so each writes its own file.
+        let name = format!("output/test-{}.png", std::process::id());
         image::RgbImage::from_pixel(16, 16, image::Rgb([120, 180, 220]))
-            .save(dir.join("output/test.png"))
+            .save(dir.join(name))
             .unwrap();
     } else {
         std::fs::write(dir.join("result.txt"), "native fixture output").unwrap();
