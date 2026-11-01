@@ -23,6 +23,7 @@ try {
   Assert ((Field 'workspace').Width -lt 600) 'Workspace field must adapt to a smaller window'
   Call 'ShowStep' @(2)
   Assert ($window.AcceptButton -eq (Field 'start')) 'Enter must start the connection on step 3'
+  (Field 'publicUrl').Clear()
   Assert ((Field 'next').Text -eq 'Open Claude guide') 'Claude guide button must explain its action'
   # Navigation must work with invalid unsaved fields and must not save or restart anything.
   (Field 'workspace').Text = 'invalid-test-path'

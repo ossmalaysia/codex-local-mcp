@@ -71,7 +71,7 @@ Open **Codex Local MCP** from the Start menu. Then:
 
 1. In **Workspace**, select **Choose folder** and choose a dedicated local workspace. Select **Continue**.
 2. In **Accounts**, enter your MCP username. Enter or generate a password, then copy it to your password manager.
-3. Select **Sign in to Codex** and complete the OpenAI login. Select **Continue**.
+3. Check the OpenAI account status. If needed, select **Sign in to OpenAI**. Select **Continue**.
 4. In **Connection**, keep **Quick Tunnel** for the first setup. No Cloudflare account is required.
 5. Select **Start connection**. The app saves settings and checks sandbox isolation before startup.
 6. In **Use in Claude**, select **Copy URL**. Add that URL as a custom connector in Claude.
@@ -95,6 +95,7 @@ When networking is disabled, it also verifies that a local test connection is de
 If any check fails, remote startup stops. The check does not call an AI model.
 
 For a permanent address, select **Named Tunnel**, then **Sign in to Cloudflare**.
+If an address is already configured, select **Start connection**. Use **Change address** only to change its setup.
 Approve your domain in the browser. Select **Load domains** to use a saved sign-in.
 Choose a domain and address name, then select **Create address**.
 The app creates the tunnel, DNS record, and local route. It rejects conflicting DNS records.
@@ -102,6 +103,8 @@ Select **Start connection** after the address is ready.
 For an existing tunnel, select **Use an existing tunnel** and enter its HTTPS origin and token.
 For that manual option, configure the hostname route to `http://127.0.0.1:<your listener port>` in Cloudflare.
 Cloudflare account credentials use Windows DPAPI encryption. They stay in the manager and do not reach Codex or the MCP server.
+The Accounts page shows the saved OpenAI account email when available and marks an existing MCP password as saved.
+The Claude guide shows a configured custom MCP URL before startup and states whether the connection is running.
 Passwords and tunnel tokens use Windows DPAPI encryption for the current user.
 Settings and Codex login files are stored under `%LOCALAPPDATA%\CodexLocalMCPData`.
 The workspace must be separate from that folder and the installation folder.

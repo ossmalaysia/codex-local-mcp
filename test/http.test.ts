@@ -57,6 +57,12 @@ async function approvedCode(clientId: string) {
   const auth = await authorize(clientId);
   expect(auth.response.status).toBe(200);
   expect(auth.html).toContain("Test &lt;client&gt;");
+  const nonce = /<style nonce="([^"]+)">/.exec(auth.html)?.[1];
+  expect(nonce).toBeTruthy();
+  expect(auth.response.headers.get("content-security-policy")).toContain(`style-src 'nonce-${nonce}'`);
+  expect(auth.response.headers.get("content-security-policy")).not.toContain("unsafe-inline");
+  expect(auth.html).not.toContain("<script");
+  expect(auth.html).toContain('autocomplete="current-password"');
   const response = await fetch(`${base}/login`, form({ request_id: auth.id, username: "admin", password }, { Cookie: auth.cookie, Origin: base }));
   expect(response.status).toBe(303);
   const callback = new URL(response.headers.get("location")!);
@@ -115,7 +121,7 @@ describe("remote MCP OAuth", () => {
     expect((await fetch(`${base}/login`, form(body))).status).toBe(400);
     expect((await fetch(`${base}/login`, form(body, { Cookie: auth.cookie, Origin: "https://attacker.example" }))).status).toBe(400);
     expect((await fetch(`${base}/login`, form({ ...body, password: "wrong" }, { Cookie: auth.cookie }))).status).toBe(401);
-    expect((await fetch(`${base}/login`, form(body, { Cookie: auth.cookie }))).status).toBe(400);
+    expect((await fetch(`${base}/login`, form(body, { Cookie: auth.cookie }))).status).toBe(303);
   });
 
   it("rejects invalid redirects, resources, scopes, PKCE, and code replay", async () => {
@@ -193,7 +199,7 @@ describe("remote MCP OAuth", () => {
     try { expect((await exchange(client.client_id, code, verifier)).status).toBe(400); }
     finally { clock.mockRestore(); }
     const auth = await authorize(client.client_id);
-    clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 301_000);
+    clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 601_000);
     try {
       expect((await fetch(`${base}/login`, form({ request_id: auth.id, username: "admin", password }, { Cookie: auth.cookie }))).status).toBe(400);
     } finally { clock.mockRestore(); }

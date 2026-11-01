@@ -22,6 +22,8 @@ try {
   if ((Get-ItemProperty -LiteralPath $registry).DisplayVersion -ne $Version) { throw 'Windows Installed apps version is incorrect' }
   & powershell.exe -NoProfile -STA -File (Join-Path $project 'installer/windows/test-manager.ps1') -Executable (Join-Path $target 'CodexMCP.exe')
   if ($LASTEXITCODE -ne 0) { throw 'Installed app UI checks failed' }
+  & powershell.exe -NoProfile -STA -File (Join-Path $project 'installer/windows/test-accounts.ps1') -Executable (Join-Path $target 'CodexMCP.exe')
+  if ($LASTEXITCODE -ne 0) { throw 'Installed app saved account checks failed' }
   & (Join-Path $target 'runtime/node/node.exe') (Join-Path $target 'verify-installed.mjs')
   if ($LASTEXITCODE -ne 0) { throw 'Installed app protocol checks failed' }
   [IO.File]::WriteAllText((Join-Path $target 'user-notes.txt'),'test user file; uninstall must preserve it')

@@ -72,3 +72,6 @@ jobs:
       - name: Test Cloudflare setup security
         shell: pwsh
         run: powershell.exe -NoProfile -File installer/windows/test-cloudflare.ps1 -Executable artifacts/windows-0.0.1/payload/CodexMCP.exe
+      - name: Test saved account and address states
+        shell: pwsh
+        run: powershell.exe -NoProfile -STA -File installer/windows/test-accounts.ps1 -Executable artifacts/windows-0.0.1/payload/CodexMCP.exe

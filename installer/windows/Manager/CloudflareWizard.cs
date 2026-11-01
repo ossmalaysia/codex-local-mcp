@@ -12,8 +12,19 @@ namespace CodexLocalMCP {
     readonly Label cloudflareAddress = Copy("Your address will appear here.", 10, true);
     readonly Button cloudflareLogin = new Button(), cloudflareRefresh = new Button(), cloudflareCreate = new Button(), cloudflareCancel = new Button();
     CancellationTokenSource cloudflareCancellation;
+    readonly FlowLayoutPanel cloudflareSetupFields = Stack();
+    readonly Label cloudflareSavedAddress = Copy("", 10, true);
+    readonly Button cloudflareChangeAddress = new Button();
 
     void BuildCloudflareFields(FlowLayoutPanel panel) {
+      panel.Controls.Add(cloudflareSavedAddress);
+      panel.Controls.Add(Row(Style(cloudflareChangeAddress, "Change address")));
+      cloudflareSavedAddress.Visible = cloudflareChangeAddress.Visible = false;
+      cloudflareChangeAddress.Click += (s, e) => {
+        cloudflareSetupFields.Visible = !cloudflareSetupFields.Visible;
+        cloudflareChangeAddress.Text = cloudflareSetupFields.Visible ? "Keep saved address" : "Change address";
+      };
+      panel.Controls.Add(cloudflareSetupFields); panel = cloudflareSetupFields;
       Style(cloudflareLogin, "Sign in to Cloudflare", true);
       Style(cloudflareRefresh, "Load domains");
       Style(cloudflareCancel, "Cancel sign-in"); cloudflareCancel.Visible = false;
@@ -50,8 +61,18 @@ namespace CodexLocalMCP {
         publicUrl.Text = "https://" + owned.Hostname;
         // Save only after normal application validation succeeds. Keep the scoped token for retry.
         token.Text = Store.Unprotect(owned.Token); Save();
+        UpdateSavedCloudflare();
         cloudflareStatus.Text = "Address ready: " + publicUrl.Text + ". Select Start connection.";
       });
+    }
+    void UpdateSavedCloudflare() {
+      Uri url;
+      bool configured = saved.Tunnel == "named" && !string.IsNullOrEmpty(saved.TunnelToken) &&
+        Uri.TryCreate(saved.PublicUrl, UriKind.Absolute, out url) && url.Scheme == "https" && url.AbsolutePath == "/" && url.UserInfo == "" && url.Query == "" && url.Fragment == "";
+      cloudflareSavedAddress.Visible = cloudflareChangeAddress.Visible = configured;
+      cloudflareSavedAddress.Text = configured ? "Address configured: " + saved.PublicUrl + "\nTunnel settings saved. Select Start connection to use this address." : "";
+      cloudflareSetupFields.Visible = !configured;
+      cloudflareChangeAddress.Text = "Change address";
     }
     void CloudflareAddress() {
       var domain = cloudflareDomain.SelectedItem as CloudflareDomain;
