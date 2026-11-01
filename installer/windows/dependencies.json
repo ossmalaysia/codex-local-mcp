@@ -17,6 +17,6 @@
   "wix": "5.0.2",
   "licenses": {
     "codex": {"url":"https://raw.githubusercontent.com/openai/codex/rust-v0.166.0/LICENSE","sha256":"d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc"},
-    "cloudflared": {"url":"https://raw.githubusercontent.com/cloudflare/cloudflared/2026.10.7/LICENSE","sha256":"58d1e17ffe5109a7ae296caafcdfdbe6a7d176f0bc4ab01e12a689b0499d8bd"}
+    "cloudflared": {"url":"https://raw.githubusercontent.com/cloudflare/cloudflared/2026.10.7/LICENSE","sha256":"58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"}
   }
 }
