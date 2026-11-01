@@ -83,9 +83,12 @@ These are inherent to what the tool is, not bugs:
   MXC or elevated setup errors stop startup. There is no automatic fallback to unelevated or full access.
 - **Isolation is provided by the Codex native process sandbox.** The CLI and selected Windows backend enforce its permissions.
   Windows, Codex, and runtime updates remain necessary. Required runtime folders are readable by design.
-- **Installer integrity is recorded.** Node and Cloudflare downloads use pinned SHA256 values.
-  Cloudflare also requires a valid publisher signature. Codex packages use npm integrity verification.
-  Each installer has a SHA256 file and source/version manifest. The MSI currently has no Authenticode signature.
+- **Installer integrity is recorded.** Bundled Cloudflare downloads use pinned SHA256 values and
+  require a valid publisher signature. Codex packages use npm integrity verification.
+  Each release has a SHA256 file and a source and version manifest.
+  The setup EXE has no Windows Authenticode signature. Verify its SHA256 before the first install.
+- **Updates are signed.** The Windows app verifies Minisign update metadata with a pinned public key,
+  then checks the installer's size, SHA256, version, and repository before it runs setup.
 - **Give it its own workspace root.** Point `CODEX_MCP_ROOT` at a dedicated directory, not at
   your source tree or home directory.
 - **Prefer a machine you can rebuild.** For untrusted workloads, run it in a VM or container.

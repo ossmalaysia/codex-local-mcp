@@ -2,6 +2,10 @@
 
 Step by step, from nothing to generating an image from your MCP client. Roughly 10 minutes.
 
+This guide is for the **command-line server** (Node.js, any operating system).
+On Windows, the easier path is the desktop app: follow the
+**[Windows app guide](docs/WINDOWS-GUIDE.md)** instead.
+
 ---
 
 ## Step 1 — Install Node.js 20+
