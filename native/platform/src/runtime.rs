@@ -76,6 +76,10 @@ pub fn configure(cmd: &mut Command, install: &Path, settings: &Settings) -> Resu
         .env("CODEX_MCP_TRANSPORT", "http")
         .env("CODEX_MCP_ACTIVITY", "1")
         .env(
+            "CODEX_MCP_ACTIVITY_PROMPTS",
+            if settings.show_prompts { "1" } else { "0" },
+        )
+        .env(
             "CODEX_TASK_DEFAULTS",
             serde_json::to_string(&settings.execution)?,
         )

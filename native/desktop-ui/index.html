@@ -15,11 +15,14 @@
       </div>
       <p class="muted">Your workspace. Connected to Claude.</p>
       <nav aria-label="Setup">
-        <button data-page="workspace" class="selected">
-          1 <span>Workspace</span></button
-        ><button data-page="accounts">2 <span>Accounts</span></button
-        ><button data-page="connection">3 <span>Connection</span></button
-        ><button data-page="claude">4 <span>Use in Claude</span></button
+        <button data-page="workspace" class="selected" aria-current="page">
+          1 <span>Workspace</span><i class="done-mark"></i></button
+        ><button data-page="accounts">
+          2 <span>Accounts</span><i class="done-mark"></i></button
+        ><button data-page="connection">
+          3 <span>Connection</span><i class="done-mark"></i></button
+        ><button data-page="claude">
+          4 <span>Use in Claude</span><i class="done-mark"></i></button
         ><button data-page="activity">
           ◷ <span>Activity</span><i id="active-count"></i>
         </button>
@@ -37,7 +40,16 @@
       </div>
     </aside>
     <main>
-      <output id="notice" aria-live="polite" hidden></output>
+      <div id="notice-bar" hidden>
+        <output id="notice" aria-live="polite"></output
+        ><button id="notice-close" class="icon" aria-label="Dismiss message">
+          ×
+        </button>
+      </div>
+      <div id="locked-note" hidden>
+        <span>The connection is running. Stop it to change these settings.</span
+        ><button id="locked-stop">Stop connection</button>
+      </div>
       <section id="workspace" class="page">
         <div class="eyebrow">STEP 1 OF 4</div>
         <h1>Choose a place to work</h1>
@@ -48,12 +60,18 @@
         <div class="card">
           <label for="folder">Workspace folder</label>
           <div class="row">
-            <input id="folder" autocomplete="off" /><button id="browse">
+            <input id="folder" autocomplete="off" required /><button
+              id="browse"
+            >
               Browse…
             </button>
           </div>
-          <p class="hint">Each request gets its own folder here.</p>
-          <button id="open-workspace" class="quiet">Open folder</button>
+          <p class="hint">
+            Each request gets its own folder here.
+            <button id="open-workspace" class="quiet inline">
+              Open folder
+            </button>
+          </p>
           <hr />
           <label for="backend">Windows sandbox</label
           ><select id="backend">
@@ -96,9 +114,15 @@
               take longer.
             </p>
             <label for="task-timeout">Task timeout (seconds)</label
-            ><input id="task-timeout" type="number" min="1" max="1800" />
+            ><input
+              id="task-timeout"
+              type="number"
+              min="1"
+              max="1800"
+              required
+            />
             <label for="image-count">Image count</label
-            ><input id="image-count" type="number" min="1" max="10" />
+            ><input id="image-count" type="number" min="1" max="10" required />
             <label for="image-size">Image dimensions</label
             ><input id="image-size" placeholder="1024x1024 or auto" />
             <label for="image-quality">Generation quality</label
@@ -117,7 +141,13 @@
               </option>
             </select>
             <label for="image-compression">Output quality (1–100)</label
-            ><input id="image-compression" type="number" min="1" max="100" />
+            ><input
+              id="image-compression"
+              type="number"
+              min="1"
+              max="100"
+              required
+            />
             <p class="hint">
               Lower values make smaller JPEG files. The native service saves PNG
               and WebP losslessly.
@@ -129,7 +159,13 @@
               <option value="auto">Auto</option>
             </select>
             <label for="image-budget">Target file size (KB per image)</label
-            ><input id="image-budget" type="number" min="16" max="10240" />
+            ><input
+              id="image-budget"
+              type="number"
+              min="16"
+              max="10240"
+              required
+            />
             <p class="hint">
               The prompt requests this size. Actual file size depends on the
               image and available tools.
@@ -155,8 +191,10 @@
             <span id="openai-state" class="badge">Checking…</span>
           </div>
           <p id="account-detail" class="hint">Checking your saved sign-in.</p>
-          <button id="account-login">Sign in to OpenAI</button
-          ><button id="account-status" class="quiet">Refresh status</button>
+          <div class="row wrap">
+            <button id="account-login">Sign in to OpenAI</button
+            ><button id="account-status" class="quiet">Refresh status</button>
+          </div>
         </div>
         <div class="card">
           <div class="card-head">
@@ -164,7 +202,8 @@
             <span id="password-state" class="badge">Not set</span>
           </div>
           <label for="username">Username</label
-          ><input id="username" autocomplete="username" /><label for="password"
+          ><input id="username" autocomplete="username" required /><label
+            for="password"
             >New password</label
           ><input
             id="password"
@@ -201,27 +240,37 @@
           </select>
           <p id="tunnel-hint" class="hint"></p>
           <div id="named" hidden>
-            <div id="saved-address" class="success" hidden></div>
-            <div class="card-head">
-              <h2>Cloudflare account</h2>
-              <span id="cloudflare-state" class="badge">Not checked</span>
-            </div>
-            <button id="cloudflare-login">Sign in to Cloudflare</button
-            ><button id="cloudflare-status" class="quiet">
-              Refresh domains
-            </button>
-            <p class="hint">
-              Your browser opens for sign-in. Choose the domain you want to use.
-            </p>
-            <div id="domain-fields" hidden>
-              <label for="domain">Domain</label
-              ><select id="domain"></select
-              ><label for="prefix">Address name</label
-              ><input id="prefix" value="codex" maxlength="63" /><button
-                id="cloudflare-create"
-              >
-                Create or use this address
+            <div id="saved-address" class="success" hidden>
+              <span id="saved-address-text"></span
+              ><button id="change-address" class="quiet inline">
+                Change address
               </button>
+            </div>
+            <div id="cloudflare-setup">
+              <div class="card-head">
+                <h2>Cloudflare account</h2>
+                <span id="cloudflare-state" class="badge">Not checked</span>
+              </div>
+              <div class="row wrap">
+                <button id="cloudflare-login">Sign in to Cloudflare</button
+                ><button id="cloudflare-status" class="quiet">
+                  Refresh domains
+                </button>
+              </div>
+              <p class="hint">
+                Your browser opens for sign-in. Choose the domain you want to
+                use.
+              </p>
+              <div id="domain-fields" hidden>
+                <label for="domain">Domain</label
+                ><select id="domain"></select
+                ><label for="prefix">Address name</label
+                ><input id="prefix" value="codex" maxlength="63" />
+                <p id="prefix-preview" class="hint"></p>
+                <button id="cloudflare-create">
+                  Create or use this address
+                </button>
+              </div>
             </div>
             <details>
               <summary>Use an existing tunnel token</summary>
@@ -242,7 +291,7 @@
           <details>
             <summary>Advanced settings</summary>
             <label for="port">Local listener port</label
-            ><input id="port" type="number" min="1024" max="65535" />
+            ><input id="port" type="number" min="1024" max="65535" required />
           </details>
         </div>
         <div class="row wrap">
@@ -271,7 +320,9 @@
           />
           <p id="endpoint-hint" class="hint"></p>
           <div class="row wrap">
-            <button id="copy-url">Copy URL</button
+            <button id="claude-start" class="primary" hidden>
+              Start connection</button
+            ><button id="copy-url">Copy URL</button
             ><button id="open-claude" class="primary">
               Open Claude settings ↗
             </button>
@@ -302,11 +353,22 @@
             <span id="activity-status" class="badge"></span>
           </div>
           <p id="last-request" class="hint">No requests yet.</p>
+          <hr />
+          <label class="check"
+            ><input type="checkbox" id="show-prompts" />Show the prompts that
+            Claude sends</label
+          >
+          <p id="show-prompts-hint" class="hint">
+            Off by default. Prompts can contain private text. They show only in
+            this window and are not saved. The change applies the next time you
+            start the connection.
+          </p>
         </div>
         <div id="tasks"></div>
         <p class="hint">
           Activity shows stages, elapsed time, task settings, and workspace
-          paths. Prompts, credentials, and task output stay out of this view.
+          paths. Prompts show only when you turn them on. Credentials and task
+          output stay out of this view.
         </p>
       </section>
     </main>

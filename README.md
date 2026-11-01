@@ -107,7 +107,10 @@ Open **Activity** to see incoming MCP requests and each task's status, elapsed t
 Running tasks send progress updates every five seconds. Command execution, file writes, completion, failure, and timeout states appear separately.
 Use **Open folder** in Workspace to inspect files.
 Activity stays in memory for the current app session. Stopping the connection marks unfinished tasks as interrupted.
-The view uses fixed progress messages. It does not copy request prompts, command text, credentials, or image Base64 data into the activity list.
+The view uses fixed progress messages. It does not copy command text, credentials, or image Base64 data into the activity list.
+Prompts are hidden by default. Turn on **Show the prompts that Claude sends** in Activity to review each prompt and improve it.
+Shown prompts are limited to 2,000 characters, kept in memory only, and apply from the next connection start.
+Settings are locked while the connection runs. Stop the connection to change them.
 Passwords and tunnel tokens use Windows DPAPI encryption for the current user.
 Settings and Codex login files are stored under `%LOCALAPPDATA%\CodexLocalMCPData`.
 The workspace must be separate from that folder and the installation folder.

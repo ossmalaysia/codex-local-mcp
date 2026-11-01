@@ -71,6 +71,7 @@ try {
               };
             case "save_settings":
               settings = { ...settings, ...args.input };
+              window.__saved = args.input;
               return settings;
             case "generate_password":
               return { ...settings, passwordSaved: true };
@@ -116,6 +117,9 @@ try {
                       },
                     ],
                     workspace: "C:\\Workspaces\\test",
+                    prompt: "Draw a red fox in fresh snow.\nUse soft light.",
+                    promptChars: 46,
+                    promptTruncated: false,
                   },
                 ],
               };
@@ -150,13 +154,22 @@ try {
     "Password saved",
   );
   assert.equal(await page.locator("#password").inputValue(), "");
+  assert.equal(await page.locator("#copy-password").isEnabled(), true);
+  await page.locator("nav button.done[data-page=accounts]").waitFor();
   await page.getByRole("button", { name: "4 Use in Claude" }).click();
   assert.equal(
     await page.locator("#endpoint").inputValue(),
     "https://codex.example.com/mcp",
   );
+  await page
+    .locator("#claude")
+    .getByRole("button", { name: "Start connection", exact: true })
+    .waitFor();
   await page.getByRole("button", { name: "3 Connection" }).click();
   await page.getByText("Address saved: https://codex.example.com").waitFor();
+  assert.equal(await page.locator("#cloudflare-setup").isVisible(), false);
+  await page.getByRole("button", { name: "Change address" }).click();
+  await page.getByText("Your address: https://codex.example.com").waitFor();
   await page
     .getByRole("button", { name: "Start connection", exact: true })
     .click();
@@ -167,6 +180,15 @@ try {
     /codex_generate_image/,
   );
   await page.getByText("Generating the image", { exact: false }).waitFor();
+  await page.locator("#tasks .badge.busy", { hasText: "Running" }).waitFor();
+  await page.locator("nav button.done[data-page=connection]").waitFor();
+  await page.getByText("Prompt sent by Claude").waitFor();
+  await page.getByText(/Draw a red fox in fresh snow/).waitFor();
+  // The prompt block survives the one-second refresh, so it keeps its state.
+  const prompt = await page.locator(".task-prompt").elementHandle();
+  await page.waitForTimeout(1200);
+  assert.equal(await prompt.evaluate((el) => el.isConnected), true);
+  assert.equal(await page.locator("#show-prompts").isDisabled(), true);
   await page.getByText("Target: 128 KB", { exact: true }).waitFor();
   await page.getByText(/64.0 KB.*512×512/).waitFor();
   assert.equal(await page.locator("#image-format").inputValue(), "jpeg");
@@ -177,6 +199,11 @@ try {
     .click();
   await page.getByRole("button", { name: "Install version 0.8.0" }).waitFor();
   await page.getByRole("button", { name: "1 Workspace" }).click();
+  // Settings are locked, not rejected, while the connection runs.
+  assert.equal(await page.locator("#folder").isDisabled(), true);
+  await page.getByRole("button", { name: "Stop connection" }).click();
+  await page.locator("#locked-note").waitFor({ state: "hidden" });
+  assert.equal(await page.locator("#folder").isDisabled(), false);
   await page
     .getByRole("button", { name: "Check sandbox", exact: true })
     .click();
@@ -184,6 +211,22 @@ try {
     await page.locator("#notice").innerText(),
     /Sandbox check failed/,
   );
+  await page.getByRole("button", { name: "Dismiss message" }).click();
+  assert.equal(await page.locator("#notice-bar").isVisible(), false);
+  // An invalid setting is reported at its field and never reaches the service.
+  await page.getByText("Task and image settings").click();
+  await page.locator("#image-count").fill("0");
+  await page
+    .locator("#workspace")
+    .getByRole("button", { name: "Save and continue →" })
+    .click();
+  assert.match(await page.locator("#notice").innerText(), /Image count/);
+  assert.equal(await page.locator("#workspace").isVisible(), true);
+  await page.locator("#image-count").fill("1");
+  await page.getByRole("button", { name: /Activity/ }).click();
+  await page.locator("#show-prompts").check();
+  await page.getByText("Prompts will show in Activity").waitFor();
+  assert.equal(await page.evaluate(() => window.__saved.showPrompts), true);
   await page.setViewportSize({ width: 800, height: 620 });
   assert.equal(
     await page.evaluate(
@@ -191,9 +234,18 @@ try {
     ),
     false,
   );
+  // The sidebar footer must not overlap the navigation in a short window.
+  assert.equal(
+    await page.evaluate(
+      () =>
+        document.querySelector("nav").getBoundingClientRect().bottom <=
+        document.querySelector(".sidebar-bottom").getBoundingClientRect().top,
+    ),
+    true,
+  );
   assert.deepEqual(errors, []);
   console.log(
-    "Desktop UI passed: saved accounts, saved hostname, connection, live activity, update notice, errors, minimum window width.",
+    "Desktop UI passed: saved accounts, step status, saved hostname, connection, live activity, update notice, errors, field validation, locked settings, prompt display, minimum window size.",
   );
 } finally {
   await browser.close();

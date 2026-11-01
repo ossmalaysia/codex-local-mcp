@@ -86,6 +86,13 @@ impl Jobs {
         }
         let options: crate::task_options::TaskOptions = serde_json::from_value(values)?;
         options.validate()?;
+        // The caller's own text, not the service-added image instructions, is
+        // what a user can improve. Sent once; the desktop keeps merged fields.
+        let first = if self.config.activity_prompts {
+            prompt_preview(prompt)
+        } else {
+            json!({})
+        };
         let (prompt, open) = if action == "codex_generate_image" {
             (
                 format!(
@@ -151,7 +158,7 @@ impl Jobs {
             ensure!(entries.len() < 132, "Job storage is full");
             entries.insert(job.id.clone(), job.clone());
         }
-        self.emit(&job, "running", json!({}));
+        self.emit(&job, "running", first);
         let timeout = options.timeout_sec.min(self.config.max_timeout);
         let owner = self.clone();
         let running = job.clone();
@@ -395,8 +402,41 @@ impl Jobs {
     }
 }
 
+/// The desktop drops activity lines over 16 KiB, so the prompt is bounded by
+/// characters and by its escaped JSON size, which can be six times larger.
+const PROMPT_PREVIEW_CHARS: usize = 2000;
+const PROMPT_PREVIEW_JSON: usize = 8000;
+fn prompt_preview(prompt: &str) -> Value {
+    let mut text: String = prompt.chars().take(PROMPT_PREVIEW_CHARS).collect();
+    while serde_json::to_string(&text).map_or(0, |s| s.len()) > PROMPT_PREVIEW_JSON {
+        let keep = text.chars().count() * 3 / 4;
+        text = text.chars().take(keep).collect();
+    }
+    let total = prompt.chars().count();
+    json!({"prompt":text,"promptChars":total,"promptTruncated":text.chars().count() < total})
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_preview_is_bounded() {
+        let short = prompt_preview("Draw a red fox");
+        assert_eq!(short["prompt"], "Draw a red fox");
+        assert_eq!(short["promptTruncated"], false);
+        let long = prompt_preview(&"é".repeat(5000));
+        assert_eq!(
+            long["prompt"].as_str().unwrap().chars().count(),
+            PROMPT_PREVIEW_CHARS
+        );
+        assert_eq!(long["promptChars"], 5000);
+        assert_eq!(long["promptTruncated"], true);
+        let control = prompt_preview(&"\u{1}".repeat(5000));
+        assert!(serde_json::to_string(&control["prompt"]).unwrap().len() <= PROMPT_PREVIEW_JSON);
+        assert_eq!(control["promptTruncated"], true);
+    }
+
     #[test]
     fn image_sizes() {
         for v in ["auto", "1024x1024", "800x600"] {
