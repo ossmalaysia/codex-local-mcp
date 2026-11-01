@@ -105,6 +105,7 @@ pub struct Collected {
     pub content: Vec<Value>,
     pub lines: Vec<String>,
     pub count: usize,
+    pub details: Vec<Value>,
 }
 
 struct Preview {
@@ -191,6 +192,7 @@ pub fn collect(config: &Config, dir: &Path, paths: &[std::path::PathBuf], open: 
         content: vec![],
         lines: vec![],
         count: 0,
+        details: vec![],
     };
     let mut spent = 0;
     for path in paths.iter().take(config.files) {
@@ -210,6 +212,14 @@ pub fn collect(config: &Config, dir: &Path, paths: &[std::path::PathBuf], open: 
             if open {
                 let _ = open_image(&real);
             }
+        }
+        let dimensions = if mime(&real).is_some() {
+            image::image_dimensions(&real).ok()
+        } else {
+            None
+        };
+        if result.details.len() < 20 {
+            result.details.push(json!({"name":name.chars().take(160).collect::<String>(),"bytes":meta.len(),"width":dimensions.map(|v|v.0),"height":dimensions.map(|v|v.1)}));
         }
         result.lines.push(line);
         result.count += 1;

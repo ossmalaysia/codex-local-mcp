@@ -89,6 +89,32 @@ try {
                     status: "running",
                     phase: "running_command",
                     elapsedMs: 5000,
+                    idleMs: 1000,
+                    steps: 3,
+                    history: [
+                      { phase: "generating_image", atMs: 1000 },
+                      { phase: "writing_files", atMs: 4000 },
+                    ],
+                    options: {
+                      model: "gpt-6.1-sol",
+                      reasoning_effort: "low",
+                      timeout_sec: 180,
+                      count: 1,
+                      size: "512x512",
+                      quality: "low",
+                      output_format: "jpeg",
+                      output_compression: 75,
+                      background: "opaque",
+                      target_file_kb: 128,
+                    },
+                    outputFiles: [
+                      {
+                        name: "output/image.jpg",
+                        bytes: 65536,
+                        width: 512,
+                        height: 512,
+                      },
+                    ],
                     workspace: "C:\\Workspaces\\test",
                   },
                 ],
@@ -140,6 +166,10 @@ try {
     await page.locator("#last-request").innerText(),
     /codex_generate_image/,
   );
+  await page.getByText("Generating the image", { exact: false }).waitFor();
+  await page.getByText("Target: 128 KB", { exact: true }).waitFor();
+  await page.getByText(/64.0 KB.*512×512/).waitFor();
+  assert.equal(await page.locator("#image-format").inputValue(), "jpeg");
   await mkdir("artifacts/desktop-ui", { recursive: true });
   await page.screenshot({ path: "artifacts/desktop-ui/activity.png" });
   await page

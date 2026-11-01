@@ -53,12 +53,15 @@ try {
   for (const args of [{ prompt: 3 }, { prompt: '' }, { prompt: 'test', workspace: 4 }, { prompt: 'test', count: -1 }, { prompt: 'test', count: 1.5 }, { prompt: 'test', open: 'false' }]) {
     const bad = await local.callTool({ name: 'codex_generate_image', arguments: args }); assert.equal(bad.isError, true);
   }
+  for (const args of [{reasoning_effort:"low -c approval=always"},{output_compression:101},{background:"transparent",output_format:"jpeg"},{target_file_kb:1},{model:"invalid name"}]) {
+    const bad = await local.callTool({name:"codex_generate_image",arguments:{prompt:"fixture",...args}}); assert.equal(bad.isError,true);
+  }
   const timed = await local.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_TIMEOUT', timeout_sec: 1, wait_sec: 5 } });
   assert.equal(timed.isError, true); assert.match(timed.content[0].text, /TIMED OUT/);
   const failed = await local.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_FAILURE', wait_sec: 5 } }); assert.equal(failed.isError, true);
   const image = await local.callTool({ name: 'codex_generate_image', arguments: { prompt: 'fixture image', open: false, wait_sec: 5 } });
   assert.equal(image.isError, false); assert.ok(image.content.some(c => c.type === 'image')); assert.ok(image.content.some(c => c.type === 'resource_link'));
-  assert.match(activity, /running_command/); assert.match(activity, /writing_files/); assert.ok(!activity.includes('private-prompt-sentinel')); assert.ok(!activity.includes(password));
+  assert.match(activity, /running_command/); assert.match(activity, /writing_files/); assert.ok(!activity.includes('private-prompt-sentinel')); assert.ok(!activity.includes(password)); assert.ok(!activity.includes('private-command-sentinel')); assert.match(activity, /"steps":3/); assert.match(activity, /"input_tokens":100/);
   await local.close();
   console.log('Native stdio passed: contract, detached jobs, polling, artifacts, images, path denial, timeout, failure, child secrets, and private activity.');
 

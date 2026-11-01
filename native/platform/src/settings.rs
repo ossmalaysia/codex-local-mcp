@@ -15,6 +15,7 @@ pub struct Settings {
     pub backend: String,
     pub network: bool,
     pub port: u16,
+    pub execution: crate::task_options::TaskOptions,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -30,6 +31,7 @@ impl Default for Settings {
             backend: "mxc".into(),
             network: false,
             port: 3000,
+            execution: Default::default(),
         }
     }
 }
@@ -45,6 +47,8 @@ pub struct Input {
     pub backend: String,
     pub network: bool,
     pub port: u16,
+    #[serde(default)]
+    pub execution: crate::task_options::TaskOptions,
 }
 impl Settings {
     pub fn load() -> Result<Self> {
@@ -74,6 +78,7 @@ impl Settings {
         next.backend = input.backend;
         next.network = input.network;
         next.port = input.port;
+        next.execution = input.execution;
         if !input.password.is_empty() {
             next.password = secure::protect(input.password.as_bytes())?;
         }
@@ -86,6 +91,7 @@ impl Settings {
         Ok(())
     }
     pub fn validate(&self, install: &Path, connection: bool) -> Result<()> {
+        self.execution.validate()?;
         let workspace = PathBuf::from(&self.workspace);
         ensure!(
             !workspace.components().any(|c| matches!(
@@ -157,7 +163,7 @@ impl Settings {
         Ok(())
     }
     pub fn view(&self) -> serde_json::Value {
-        serde_json::json!({"workspace":self.workspace,"username":self.username,"passwordSaved":!self.password.is_empty(),"tunnel":self.tunnel,"tokenSaved":!self.tunnel_token.is_empty(),"publicUrl":self.public_url,"backend":self.backend,"network":self.network,"port":self.port})
+        serde_json::json!({"workspace":self.workspace,"username":self.username,"passwordSaved":!self.password.is_empty(),"tunnel":self.tunnel,"tokenSaved":!self.tunnel_token.is_empty(),"publicUrl":self.public_url,"backend":self.backend,"network":self.network,"port":self.port,"execution":self.execution})
     }
 }
 fn overlap(a: &Path, b: &Path) -> bool {

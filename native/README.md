@@ -33,8 +33,8 @@ Test workspace folders remain in the temporary directory for diagnosis.
 ```powershell
 node scripts/build-desktop-ui.mjs
 cargo clippy --locked -p codex-mcp-desktop --all-targets -- -D warnings
-./scripts/build-native-desktop.ps1 -Version 0.7.0
-./scripts/test-windows-setup.ps1 -Version 0.7.0
+./scripts/build-native-desktop.ps1 -Version 0.7.1
+./scripts/test-windows-setup.ps1 -Version 0.7.1
 node scripts/test-native-desktop.mjs clean
 ```
 
@@ -103,3 +103,37 @@ The child starts before Job Object assignment. A suspended process launch is a f
 Neither Job Objects nor Rust replace the Codex execution sandbox.
 
 See [the migration design](../docs/RUST-MIGRATION.md) for the target architecture, acceptance measurements, and security boundaries.
+
+## Task settings and live progress (0.7.1)
+
+Open **Workspace → Task and image settings**. Save, then restart the connection to apply new defaults.
+Claude can override these defaults through MCP parameters:
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `model` | Codex default | Select a supported Codex model. |
+| `reasoning_effort` | `default` | Select model effort; support depends on the model. |
+| `timeout_sec` | `300` | Limit task execution to 1–1800 seconds. |
+| `count` | `1` | Request 1–10 images. |
+| `size` | `1024x1024` | Bound image dimensions, or use `auto`. |
+| `quality` | `low` | Request image generation quality. |
+| `output_format` | `jpeg` | Save JPEG, PNG, or WebP. |
+| `output_compression` | `80` | JPEG quality, 1–100. Native PNG and WebP saves are lossless. |
+| `background` | `opaque` | Request an opaque, transparent, or automatic background. JPEG cannot preserve transparency. |
+| `target_file_kb` | `256` | Prefer this file size. JPEG quality can decrease to 35 to approach it. |
+
+Dimensions preserve aspect ratio and never enlarge the source. Actual dimensions and bytes appear in the result and desktop activity.
+A file-size target is not a guarantee. The service does not reduce dimensions merely to reach a byte target.
+Image generation quality and background are prompt requests, subject to the image tool's support.
+
+The native service reads structured `codex exec --json` events. Activity shows stage history, elapsed time, event count, last-event age, selected settings, token usage, and output metadata.
+The five-second heartbeat does not count as a new Codex event. No invented percentage is shown.
+Commands, prompts, credentials, Base64, and task text do not enter desktop activity.
+
+After an image task exits, the service collects only that CLI thread's generated-image cache.
+It validates the thread UUID, confines opened cache files, applies decoder limits, and saves converted files in a fresh workspace output directory.
+The sandbox still cannot read the private Codex home. Original cached images remain unchanged.
+This avoids Base64 round trips through model text, patch events, and repeated PowerShell launches.
+
+A local MXC test saved a 512×512 JPEG at 15,120 bytes in 43.5 seconds.
+An earlier test using a Base64 patch transfer took 100.8 seconds. These are individual runs, not a general latency guarantee.

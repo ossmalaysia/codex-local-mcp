@@ -9,6 +9,7 @@ export interface RunOptions {
   cwd: string;
   timeoutSec: number;
   model?: string;
+  reasoningEffort?: string;
   onProgress?: (phase: TaskPhase) => void;
 }
 
@@ -40,7 +41,9 @@ const SAFE_MODEL = /^[A-Za-z0-9._:/-]{1,128}$/;
 
 export class UnsafeArgumentError extends Error {
   constructor(value: string) {
-    super(`Refusing to pass model "${value}": only letters, digits and . _ : / - are allowed.`);
+    super(
+      `Refusing to pass model "${value}": only letters, digits and . _ : / - are allowed.`,
+    );
   }
 }
 
@@ -49,7 +52,14 @@ function buildArgs(opts: RunOptions): string[] {
     "exec",
     "--cd",
     opts.cwd,
-    ...sandboxArguments(config.sandboxMode, config.windowsSandbox, config.networkAccess, process.platform, config.runtimeRoot, config.privateRoot),
+    ...sandboxArguments(
+      config.sandboxMode,
+      config.windowsSandbox,
+      config.networkAccess,
+      process.platform,
+      config.runtimeRoot,
+      config.privateRoot,
+    ),
     // Workspaces are plain folders, not repos; without this codex refuses to run.
     "--skip-git-repo-check",
   ];
@@ -57,6 +67,15 @@ function buildArgs(opts: RunOptions): string[] {
   if (model) {
     if (!SAFE_MODEL.test(model)) throw new UnsafeArgumentError(model);
     args.push("--model", model);
+  }
+  if (opts.reasoningEffort && opts.reasoningEffort !== "default") {
+    if (
+      !["none", "minimal", "low", "medium", "high", "xhigh"].includes(
+        opts.reasoningEffort,
+      )
+    )
+      throw new Error("Invalid reasoning effort");
+    args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
   }
   // Trailing "-" makes codex read the prompt from stdin, so no shell quoting of
   // untrusted prompt text is ever needed.
@@ -128,35 +147,60 @@ export function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: merged, Path: merged };
   // Remote login credentials must never reach generated code or CLI subprocesses.
   for (const key of Object.keys(env)) {
-    if (/^(CODEX_MCP_PASSWORD|CODEX_MCP_TUNNEL_TOKEN|CODEX_MCP_ACTIVITY|TUNNEL_TOKEN)/i.test(key)) delete env[key];
+    if (
+      /^(CODEX_MCP_PASSWORD|CODEX_MCP_TUNNEL_TOKEN|CODEX_MCP_ACTIVITY|TUNNEL_TOKEN)/i.test(
+        key,
+      )
+    )
+      delete env[key];
   }
   return env;
 }
 
 /** Check configured credentials through the CLI, without reading its credential files. */
 export async function validateCodexLogin(): Promise<void> {
-  if (!path.isAbsolute(config.codexBin)) throw new CodexNotFoundError(config.codexBin);
+  if (!path.isAbsolute(config.codexBin))
+    throw new CodexNotFoundError(config.codexBin);
   const windows = process.platform === "win32";
   const useCmd = windows && !config.codexBin.toLowerCase().endsWith(".exe");
-  const file = useCmd ? process.env.ComSpec || path.join(systemDir(), "cmd.exe") : config.codexBin;
-  const command = [config.codexBin, "login", "status"].map(quoteForShell).join(" ");
+  const file = useCmd
+    ? process.env.ComSpec || path.join(systemDir(), "cmd.exe")
+    : config.codexBin;
+  const command = [config.codexBin, "login", "status"]
+    .map(quoteForShell)
+    .join(" ");
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(file, useCmd ? ["/d", "/s", "/c", `"${command}"`] : ["login", "status"], {
-      cwd: config.root, env: childEnv(), windowsHide: true, windowsVerbatimArguments: useCmd,
-      detached: !windows, stdio: ["ignore", "ignore", "ignore"],
-    });
+    const child = spawn(
+      file,
+      useCmd ? ["/d", "/s", "/c", `"${command}"`] : ["login", "status"],
+      {
+        cwd: config.root,
+        env: childEnv(),
+        windowsHide: true,
+        windowsVerbatimArguments: useCmd,
+        detached: !windows,
+        stdio: ["ignore", "ignore", "ignore"],
+      },
+    );
     const timer = setTimeout(() => {
       if (child.pid) killTree(child.pid);
-      reject(new Error("Codex login validation timed out. Run codex login on the server."));
+      reject(
+        new Error(
+          "Codex login validation timed out. Run codex login on the server.",
+        ),
+      );
     }, 10_000);
     child.on("error", () => {
       clearTimeout(timer);
       reject(new Error("Could not validate Codex login. Check CODEX_BIN."));
     });
-    child.on("close", code => {
+    child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve();
-      else reject(new Error("Codex is not logged in. Run codex login on the server."));
+      else
+        reject(
+          new Error("Codex is not logged in. Run codex login on the server."),
+        );
     });
   });
 }
@@ -200,19 +244,26 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
     return Promise.reject(err);
   }
   // Validate caller input first, then refuse executable lookup in a writable root.
-  if (!path.isAbsolute(config.codexBin)) return Promise.reject(new CodexNotFoundError(config.codexBin));
+  if (!path.isAbsolute(config.codexBin))
+    return Promise.reject(new CodexNotFoundError(config.codexBin));
 
   const isWindows = process.platform === "win32";
   const useCmd = isWindows && !config.codexBin.toLowerCase().endsWith(".exe");
   const started = Date.now();
 
-  const file = useCmd ? process.env.ComSpec || path.join(systemDir(), "cmd.exe") : config.codexBin;
-  const commandLine = [config.codexBin, ...rawArgs].map(quoteForShell).join(" ");
+  const file = useCmd
+    ? process.env.ComSpec || path.join(systemDir(), "cmd.exe")
+    : config.codexBin;
+  const commandLine = [config.codexBin, ...rawArgs]
+    .map(quoteForShell)
+    .join(" ");
   // /d skips AutoRun scripts, /c runs and exits. The outer quotes matter: with
   // /s cmd strips the first and last quote of the line, so an unwrapped line
   // whose first argument is quoted loses the closing quote of a *different* one.
   const args = useCmd ? ["/d", "/s", "/c", `"${commandLine}"`] : rawArgs;
-  const command = isWindows ? commandLine : `${config.codexBin} ${rawArgs.join(" ")}`;
+  const command = isWindows
+    ? commandLine
+    : `${config.codexBin} ${rawArgs.join(" ")}`;
 
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, {
@@ -228,7 +279,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
 
     const stdout = new BoundedBuffer(config.maxOutputChars);
     const stderr = new BoundedBuffer(config.maxOutputChars);
-    const progress = new CodexProgress(phase => opts.onProgress?.(phase));
+    const progress = new CodexProgress((phase) => opts.onProgress?.(phase));
     let timedOut = false;
     let settled = false;
     let reaper: NodeJS.Timeout | undefined;
@@ -258,8 +309,14 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
       reaper.unref();
     }, opts.timeoutSec * 1000);
 
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk.toString("utf8")));
-    child.stderr.on("data", (chunk: Buffer) => { const text = chunk.toString("utf8"); stderr.push(text); progress.push(text); });
+    child.stdout.on("data", (chunk: Buffer) =>
+      stdout.push(chunk.toString("utf8")),
+    );
+    child.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      stderr.push(text);
+      progress.push(text);
+    });
 
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (settled) return;

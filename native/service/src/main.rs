@@ -2,11 +2,14 @@ mod activity;
 mod artifacts;
 mod auth;
 mod config;
+mod generated;
 mod http;
 mod jobs;
 mod probe;
 mod process;
 mod protocol;
+#[path = "../../task_options.rs"]
+mod task_options;
 mod tunnel;
 mod workspace;
 

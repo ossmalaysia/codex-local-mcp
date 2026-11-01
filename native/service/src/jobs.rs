@@ -15,6 +15,7 @@ pub struct Job {
     pub action: String,
     pub workspace: PathBuf,
     pub started: Instant,
+    options: crate::task_options::TaskOptions,
     state: Mutex<JobState>,
     pub notify: Notify,
 }
@@ -22,6 +23,10 @@ struct JobState {
     result: Option<Value>,
     phase: &'static str,
     finished: Option<Instant>,
+    last_event: Instant,
+    steps: u64,
+    history: Vec<Value>,
+    usage: Value,
 }
 pub struct Jobs {
     pub config: Arc<Config>,
@@ -49,32 +54,54 @@ impl Jobs {
             .filter(|p| !p.is_empty())
             .ok_or_else(|| anyhow::anyhow!("prompt is required"))?;
         ensure!(prompt.len() <= 1_000_000, "Prompt exceeds the byte limit");
-        let model = args["model"].as_str().unwrap_or(&self.config.model);
-        ensure!(
-            model.len() <= 128
-                && model
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b)),
-            "Invalid model name"
-        );
+        let mut values = serde_json::to_value(&self.config.defaults)?;
+        for key in [
+            "model",
+            "reasoning_effort",
+            "timeout_sec",
+            "count",
+            "size",
+            "quality",
+            "output_format",
+            "output_compression",
+            "background",
+            "target_file_kb",
+        ] {
+            if let Some(value) = args.get(key) {
+                values[key] = value.clone();
+            }
+        }
+        if args.get("model").is_none() && !self.config.model.is_empty() {
+            values["model"] = json!(self.config.model);
+        }
+        if args.get("timeout_sec").is_none() && std::env::var_os("CODEX_TASK_DEFAULTS").is_none() {
+            values["timeout_sec"] = json!(self.config.timeout.min(self.config.max_timeout));
+        }
+        if let Some(n) = args["timeout_sec"].as_f64() {
+            values["timeout_sec"] = json!(if n > 0.0 {
+                n.clamp(1.0, self.config.max_timeout.min(1800) as f64) as u64
+            } else {
+                self.config.defaults.timeout_sec
+            });
+        }
+        let options: crate::task_options::TaskOptions = serde_json::from_value(values)?;
+        options.validate()?;
         let (prompt, open) = if action == "codex_generate_image" {
-            let count = args.get("count").and_then(Value::as_u64).unwrap_or(1);
-            ensure!((1..=10).contains(&count), "count must be between 1 and 10");
-            let size = args["size"].as_str().unwrap_or("1024x1024");
-            validate_size(size)?;
-            let quality = args["quality"].as_str().unwrap_or("low");
-            ensure!(
-                ["low", "medium", "high", "auto"].contains(&quality),
-                "Invalid image quality"
-            );
             (
                 format!(
-                    "{}: {prompt}\nSize: {size}.\nQuality: {quality}.\nSave the image file(s) into ./output/ in the current directory.",
-                    if count > 1 {
-                        format!("Generate {count} images")
+                    "{}: {prompt}\nSize: {}.\nQuality: {}.\nOutput format: {}.\nOutput compression: {} of 100.\nBackground: {}.\nTarget file size: {} KB per image.\n{}",
+                    if options.count > 1 {
+                        format!("Generate {} images", options.count)
                     } else {
                         "Generate an image".into()
-                    }
+                    },
+                    options.size,
+                    options.quality,
+                    options.output_format,
+                    options.output_compression,
+                    options.background,
+                    options.target_file_kb,
+                    include_str!("../../image-instructions.txt")
                 ),
                 args["open"].as_bool().unwrap_or(true),
             )
@@ -90,10 +117,15 @@ impl Jobs {
             action: action.into(),
             workspace: dir,
             started: Instant::now(),
+            options: options.clone(),
             state: Mutex::new(JobState {
                 result: None,
                 phase: "queued",
                 finished: None,
+                last_event: Instant::now(),
+                steps: 0,
+                history: vec![],
+                usage: Value::Null,
             }),
             notify: Notify::new(),
         });
@@ -120,12 +152,7 @@ impl Jobs {
             entries.insert(job.id.clone(), job.clone());
         }
         self.emit(&job, "running", json!({}));
-        let timeout = args["timeout_sec"]
-            .as_f64()
-            .filter(|n| n.is_finite() && *n > 0.0)
-            .unwrap_or(self.config.timeout as f64)
-            .clamp(1.0, self.config.max_timeout as f64) as u64;
-        let model = model.to_owned();
+        let timeout = options.timeout_sec.min(self.config.max_timeout);
         let owner = self.clone();
         let running = job.clone();
         tokio::spawn(async move {
@@ -139,7 +166,7 @@ impl Jobs {
                 }
             });
             let result = owner
-                .execute(&running, prompt, timeout, model, open)
+                .execute(&running, prompt, timeout, open)
                 .await
                 .unwrap_or_else(artifacts::error);
             heartbeat.abort();
@@ -164,7 +191,6 @@ impl Jobs {
         job: &Arc<Job>,
         prompt: String,
         timeout: u64,
-        model: String,
         open: bool,
     ) -> Result<Value> {
         let key = PathBuf::from(job.workspace.to_string_lossy().to_lowercase());
@@ -182,16 +208,23 @@ impl Jobs {
         self.phase(job, "preparing");
         let dir = job.workspace.clone();
         let before = tokio::task::spawn_blocking(move || workspace::snapshot(&dir)).await?;
-        self.phase(job, "running");
+        self.phase(
+            job,
+            if job.action == "codex_generate_image" {
+                "generating_image"
+            } else {
+                "running"
+            },
+        );
         let owner = self.clone();
         let progress_job = job.clone();
-        let report = Arc::new(move |phase| owner.phase(&progress_job, phase));
+        let report = Arc::new(move |event| owner.progress(&progress_job, event));
         let run = process::run(
             &self.config,
             &job.workspace,
             prompt,
             timeout,
-            &model,
+            &job.options,
             self.cancel.child_token(),
             report,
         )
@@ -199,23 +232,45 @@ impl Jobs {
         self.phase(job, "collecting_files");
         let dir = job.workspace.clone();
         let config = self.config.clone();
+        let image_options = job.options.clone();
+        let image_thread = if job.action == "codex_generate_image" {
+            run.thread.clone()
+        } else {
+            None
+        };
+        let codex_home = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                    .map(|p| PathBuf::from(p).join(".codex"))
+            });
         let artifact_permit = self.artifact_slots.clone().acquire_owned().await?;
         let collected = tokio::task::spawn_blocking(move || {
             let _permit = artifact_permit;
+            if let (Some(home), Some(thread)) = (codex_home, image_thread) {
+                crate::generated::collect(&home, &thread, &dir, &image_options)?;
+            }
             let after = workspace::snapshot(&dir);
             let changed: Vec<_> = after
                 .iter()
                 .filter(|(p, v)| before.get(*p) != Some(*v))
                 .map(|(p, _)| p.clone())
                 .collect();
-            artifacts::collect(&config, &dir, &changed, open)
+            Ok::<_, anyhow::Error>(artifacts::collect(&config, &dir, &changed, open))
         })
-        .await?;
+        .await??;
         self.emit(
             job,
             "running",
-            json!({"files":collected.count,"exitCode":run.code,"timedOut":run.timed_out}),
+            json!({"files":collected.count,"outputFiles":collected.details,"exitCode":run.code,"timedOut":run.timed_out}),
         );
+        let missing_image = job.action == "codex_generate_image"
+            && !collected.content.iter().any(|v| {
+                v["type"] == "image"
+                    || v["mimeType"]
+                        .as_str()
+                        .is_some_and(|s| s.starts_with("image/"))
+            });
         let output = format!(
             "{}{}",
             run.stdout.trim(),
@@ -235,7 +290,13 @@ impl Jobs {
                 ""
             },
             run.duration as f64 / 1000.0,
-            output,
+            if missing_image {
+                format!(
+                    "{output}\nNo generated image file was available. Check the Codex image tool and saved account."
+                )
+            } else {
+                output
+            },
             if collected.lines.is_empty() {
                 "(none)".into()
             } else {
@@ -244,15 +305,64 @@ impl Jobs {
         );
         let mut content = vec![artifacts::text(summary)];
         content.extend(collected.content);
-        Ok(json!({"content":content,"isError":run.timed_out || run.code != Some(0)}))
+        Ok(
+            json!({"content":content,"isError":run.timed_out || run.code != Some(0) || missing_image}),
+        )
     }
 
+    fn progress(&self, job: &Job, event: Value) {
+        if let Some(phase) = event["legacyPhase"].as_str() {
+            // Retain compatibility with older CLI stderr markers.
+            let phase = match phase {
+                "running_command" => "running_command",
+                "writing_files" => "writing_files",
+                _ => "running",
+            };
+            self.phase(job, phase);
+            return;
+        }
+        {
+            let mut state = job.state.lock().unwrap();
+            state.last_event = Instant::now();
+            if event["type"] == "item.completed" {
+                state.steps += 1;
+            }
+            if event["type"] == "turn.completed" {
+                state.usage = event["usage"].clone();
+            }
+        }
+        if event["type"] == "item.started" || event["type"] == "item.updated" {
+            self.phase(job, activity::phase(&event));
+        } else if event["type"] == "item.completed" {
+            self.phase(
+                job,
+                if job.action == "codex_generate_image" {
+                    "generating_image"
+                } else {
+                    "running"
+                },
+            );
+        }
+    }
     fn phase(&self, job: &Job, phase: &'static str) {
-        job.state.lock().unwrap().phase = phase;
+        {
+            let mut state = job.state.lock().unwrap();
+            state.last_event = Instant::now();
+            if state.phase != phase || state.history.is_empty() {
+                if state.history.len() >= 24 {
+                    state.history.remove(0);
+                }
+                state
+                    .history
+                    .push(json!({"phase":phase,"atMs":job.started.elapsed().as_millis() as u64}));
+            }
+            state.phase = phase;
+        }
         self.emit(job, "running", json!({}));
     }
     fn emit(&self, job: &Job, status: &str, extras: Value) {
-        let mut event = json!({"type":"job","id":job.id,"action":job.action,"workspace":job.workspace,"status":status,"phase":job.state.lock().unwrap().phase,"elapsedMs":job.started.elapsed().as_millis() as u64});
+        let state = job.state.lock().unwrap();
+        let mut event = json!({"type":"job","id":job.id,"action":job.action,"workspace":job.workspace,"status":status,"phase":state.phase,"elapsedMs":job.started.elapsed().as_millis() as u64,"idleMs":state.last_event.elapsed().as_millis() as u64,"steps":state.steps,"history":state.history,"options":job.options,"usage":state.usage});
         event
             .as_object_mut()
             .unwrap()
@@ -285,41 +395,15 @@ impl Jobs {
     }
 }
 
-fn validate_size(size: &str) -> Result<()> {
-    let size = size.trim().to_lowercase();
-    if size == "auto" {
-        return Ok(());
-    }
-    let Some((w, h)) = size.split_once('x') else {
-        anyhow::bail!("Use WIDTHxHEIGHT or auto");
-    };
-    ensure!(
-        !w.is_empty()
-            && !h.is_empty()
-            && w.len() <= 5
-            && h.len() <= 5
-            && w.bytes().chain(h.bytes()).all(|b| b.is_ascii_digit()),
-        "Invalid image size"
-    );
-    let w: u32 = w.parse()?;
-    let h: u32 = h.parse()?;
-    ensure!(
-        (1..=16384).contains(&w) && (1..=16384).contains(&h),
-        "Image dimensions must be between 1 and 16384"
-    );
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[test]
     fn image_sizes() {
         for v in ["auto", "1024x1024", "800x600"] {
-            assert!(validate_size(v).is_ok());
+            assert!(crate::task_options::validate_size(v).is_ok());
         }
         for v in ["0x1", "16385x1", "1x2x3", "NaN", "-1x1"] {
-            assert!(validate_size(v).is_err());
+            assert!(crate::task_options::validate_size(v).is_err());
         }
     }
 }
