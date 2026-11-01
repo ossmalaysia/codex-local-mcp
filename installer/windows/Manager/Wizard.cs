@@ -15,8 +15,8 @@ namespace CodexLocalMCP {
     static readonly Color Canvas = Color.FromArgb(246, 247, 251);
     readonly Button login = new Button(), check = new Button();
     readonly Button back = new Button(), next = new Button(), copyUrl = new Button();
-    readonly Button[] navigation = new Button[4];
-    readonly Panel[] pages = new Panel[4];
+    readonly Button[] navigation = new Button[5];
+    readonly Panel[] pages = new Panel[5];
     readonly Label state = new Label(), accountState = new Label(), progress = new Label(), passwordState = new Label(), tunnelHint = Copy(" ", 9);
     readonly TextBox endpoint = new TextBox { ReadOnly = true };
     readonly Label endpointHint = Copy("Start the connection in step 3 to get your URL.", 9);
@@ -80,7 +80,7 @@ namespace CodexLocalMCP {
       rail.Controls.Add(Copy("Codex Local MCP", 16, true));
       rail.Controls.Add(Copy("Your PC. Connected to Claude.", 9));
       var divider = Copy("SETUP", 9, true); divider.Margin = new Padding(0, 26, 0, 14); rail.Controls.Add(divider);
-      var names = new[] { "1   Workspace", "2   Accounts", "3   Connection", "4   Use in Claude" };
+      var names = new[] { "1   Workspace", "2   Accounts", "3   Connection", "4   Use in Claude", "Activity" };
       for (int i = 0; i < names.Length; i++) {
         int step = i; var button = Style(new Button(), names[i]); button.Width = 200;
         button.TextAlign = ContentAlignment.MiddleLeft; button.FlatAppearance.BorderSize = 0;
@@ -90,7 +90,7 @@ namespace CodexLocalMCP {
       sidebarFooter = bottom;
       state.Text = "Not connected"; state.AutoSize = true; state.ForeColor = Muted; state.MaximumSize = new Size(200, 0);
       var activity = new LinkLabel { Text = "View activity", AutoSize = true, LinkColor = Accent, Margin = new Padding(0, 10, 0, 12) };
-      activity.LinkClicked += (s, e) => { ShowStep(3); log.Visible = true; };
+      activity.LinkClicked += (s, e) => ShowStep(4);
       bottom.Controls.Add(state); bottom.Controls.Add(activity); bottom.Controls.Add(Copy("v" + version + "  /  Windows x64", 9)); sidebar.Controls.Add(bottom);
       var main = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0), BackColor = Color.White };
       main.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); main.RowStyles.Add(new RowStyle(SizeType.Absolute, 78)); shell.Controls.Add(main, 1, 0);
@@ -157,11 +157,9 @@ namespace CodexLocalMCP {
       use.Controls.Add(Copy("2. Add a custom connector and paste this URL.", 11, true));
       use.Controls.Add(Copy("3. Connect, then enter your MCP username and password.", 11, true));
       use.Controls.Add(Copy("Keep this app open and this PC awake while Claude uses the connection.", 9));
-      var showLogs = Style(new Button(), "Show activity");
-      log.Width = 620; log.Height = 140; log.Dock = DockStyle.None; log.BorderStyle = BorderStyle.FixedSingle; log.BackColor = Canvas;
-      log.Font = new Font("Consolas", 9); log.Visible = false;
-      showLogs.Click += (s, e) => { log.Visible = !log.Visible; showLogs.Text = log.Visible ? "Hide activity" : "Show activity"; };
-      use.Controls.Add(Row(showLogs)); use.Controls.Add(log);
+      var showActivity = Style(new Button(), "View live activity");
+      showActivity.Click += (s, e) => ShowStep(4); use.Controls.Add(Row(showActivity));
+      BuildActivityPage(host);
       foreach (var page in pages) host.Controls.Add(page);
 
       var footer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(26, 12, 24, 8), ColumnCount = 3 };
@@ -177,11 +175,11 @@ namespace CodexLocalMCP {
       ShowStep(0);
     }
     void ShowStep(int index) {
-      currentStep = Math.Max(0, Math.Min(3, index));
-      for (int i = 0; i < pages.Length; i++) { pages[i].Visible = i == currentStep; navigation[i].BackColor = i == currentStep ? Color.FromArgb(231, 230, 253) : Canvas; navigation[i].ForeColor = i == currentStep ? Accent : Muted; navigation[i].AccessibleDescription = i == currentStep ? "Current setup step" : "Open setup step " + (i + 1); }
-      pages[currentStep].BringToFront(); back.Enabled = currentStep > 0; next.Visible = currentStep < 3;
-      next.Text = currentStep == 2 ? "Open Claude guide" : "Continue"; progress.Text = "Step " + (currentStep + 1) + " of 4";
-      AcceptButton = currentStep == 3 ? copyUrl : currentStep == 2 ? start : next;
+      currentStep = Math.Max(0, Math.Min(4, index));
+      for (int i = 0; i < pages.Length; i++) { pages[i].Visible = i == currentStep; navigation[i].BackColor = i == currentStep ? Color.FromArgb(231, 230, 253) : Canvas; navigation[i].ForeColor = i == currentStep ? Accent : Muted; navigation[i].AccessibleDescription = i == currentStep ? "Current view" : i == 4 ? "Open live activity" : "Open setup step " + (i + 1); }
+      pages[currentStep].BringToFront(); back.Visible = currentStep < 4; back.Enabled = currentStep > 0; next.Visible = currentStep < 3;
+      next.Text = currentStep == 2 ? "Open Claude guide" : "Continue"; progress.Text = currentStep == 4 ? "Live activity" : "Step " + (currentStep + 1) + " of 4";
+      AcceptButton = currentStep == 4 ? null : currentStep == 3 ? copyUrl : currentStep == 2 ? start : next;
     }
     internal void PreviewStep(int index) { ShowStep(index); }
     static void FitPage(Panel page, FlowLayoutPanel stack) {
@@ -190,7 +188,7 @@ namespace CodexLocalMCP {
     }
     static void FitControls(Control container, int width) {
       foreach (Control control in container.Controls) {
-        if (control is TextBox || control is RichTextBox || control is ComboBox || control is NumericUpDown) control.Width = width;
+        if (control is TextBox || control is RichTextBox || control is ComboBox || control is NumericUpDown || control is ListView || control is ProgressBar) control.Width = width;
         if (control is Label || control is FlowLayoutPanel) control.MaximumSize = new Size(width, 0);
         if (control is Panel) FitControls(control, width);
       }
@@ -231,6 +229,7 @@ namespace CodexLocalMCP {
       state.Text = message; state.ForeColor = connected ? Color.FromArgb(25, 116, 85) : Muted;
       state.AccessibleName = "Connection status: " + message;
       if (trayStatus != null) trayStatus.Text = message;
+      if (!connected && message == "Not connected") InterruptActivity();
       if (!connected) UpdateEndpointPreview();
       else endpointHint.Text = "Connection running. Copy this URL into Claude.";
     }
@@ -238,7 +237,7 @@ namespace CodexLocalMCP {
       if (!text.StartsWith("codex-local-mcp ready: ", StringComparison.Ordinal)) return;
       var match = Regex.Match(text, @"https://[^\s]+/mcp(?=\s|$)");
       if (!match.Success) return;
-      endpoint.Text = match.Value; copyUrl.Enabled = true; ConnectionStatus("Connected · keep app open", true); ShowStep(3);
+      endpoint.Text = match.Value; copyUrl.Enabled = true; ConnectionStatus("Connected · keep app open", true); ShowStep(4);
     }
   }
 }

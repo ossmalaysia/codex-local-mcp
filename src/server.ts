@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { config } from "./config.js";
 import { readArtifact, imageMimeType, uriToPath } from "./artifacts.js";
-import { clampWait, getJob, startJob, waitForJob, type Job } from "./jobs.js";
+import { clampWait, getJob, startJob, reportJob, waitForJob, type Job } from "./jobs.js";
 import { openInViewer } from "./open.js";
 import {
   executeTask,
@@ -197,13 +197,14 @@ export function createServer(): McpServer {
     async (args, extra) => {
       try {
         const { workspace, relName } = prepareWorkspace(args.workspace);
-        const job = startJob("codex_run", workspace, async () =>
+        const job = startJob<ToolResult>("codex_run", workspace, async job =>
           formatTask(
             await executeTask({
               prompt: args.prompt,
               workspace: relName,
               timeout_sec: args.timeout_sec,
               model: args.model,
+              onProgress: progress => reportJob(job, progress),
             }),
           ),
         );
@@ -263,11 +264,12 @@ export function createServer(): McpServer {
         const requested = parseImageSize(size);
         const { workspace, relName } = prepareWorkspace(args.workspace);
 
-        const job = startJob("codex_generate_image", workspace, async () => {
+        const job = startJob<ToolResult>("codex_generate_image", workspace, async job => {
           const result = await executeTask({
             prompt: imagePromptTemplate(args.prompt, args.count ?? 1, size, args.quality ?? "low"),
             workspace: relName,
             timeout_sec: args.timeout_sec,
+            onProgress: progress => reportJob(job, progress),
           });
           return finishImages(result, requested, args.open !== false);
         });

@@ -182,6 +182,7 @@ namespace CodexLocalMCP {
       info.EnvironmentVariables["CODEX_RUNTIME_ROOT"] = installRoot;
       info.EnvironmentVariables["CODEX_PRIVATE_ROOT"] = Store.Root;
       info.EnvironmentVariables["CODEX_MCP_TRANSPORT"] = "http";
+      info.EnvironmentVariables["CODEX_MCP_ACTIVITY"] = "1";
       info.EnvironmentVariables["CODEX_MCP_HOST"] = "127.0.0.1";
       info.EnvironmentVariables["CODEX_MCP_PORT"] = saved.Port.ToString();
       info.EnvironmentVariables["CODEX_MCP_USERNAME"] = saved.Username;
@@ -237,6 +238,7 @@ namespace CodexLocalMCP {
     void Write(string text) {
       if (string.IsNullOrEmpty(text) || IsDisposed) return;
       if (InvokeRequired) { BeginInvoke(new Action<string>(Write), text); return; }
+      if (ReadActivity(text)) return;
       foreach (var secret in new[] { saved.Password, saved.TunnelToken }) if (!string.IsNullOrEmpty(secret)) {
         var plaintext = Store.Unprotect(secret); if (plaintext.Length > 0) text = text.Replace(plaintext, "[redacted]");
       }

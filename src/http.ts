@@ -12,6 +12,7 @@ import { config } from "./config.js";
 import { validateCodexLogin } from "./codex.js";
 import { startQuickTunnel, type Tunnel } from "./tunnel.js";
 import { setupOwnerLogin } from "./login-setup.js";
+import { emitActivity } from "./activity.js";
 
 export type HttpOptions = { publicUrl: URL; username: string; password: string; host: string; port: number };
 
@@ -69,6 +70,10 @@ export function createHttpApp(options: HttpOptions, checkLogin = validateCodexLo
   let checking: Promise<void> | undefined;
   app.post("/mcp", async (req, res, next) => {
     try {
+      const method = req.body?.method;
+      const tool = req.body?.params?.name;
+      if (["initialize", "tools/list", "resources/list", "resources/read"].includes(method)) emitActivity({ type: "request", action: method });
+      else if (method === "tools/call" && ["codex_run", "codex_generate_image", "codex_job_result", "codex_read_artifact"].includes(tool)) emitActivity({ type: "request", action: tool });
       if (Date.now() >= validUntil) {
         checking ??= checkLogin().then(() => { validUntil = Date.now() + 30_000; }).finally(() => { checking = undefined; });
         try { await checking; } catch {

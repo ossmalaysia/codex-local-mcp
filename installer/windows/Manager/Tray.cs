@@ -22,6 +22,7 @@ namespace CodexLocalMCP {
       trayStatus = new ToolStripMenuItem("Not connected") { Enabled = false }; menu.Items.Add(trayStatus);
       menu.Items.Add(new ToolStripSeparator());
       menu.Items.Add("Open", null, (s, e) => RestoreWindow());
+      menu.Items.Add("Live activity", null, (s, e) => { RestoreWindow(); ShowStep(4); });
       menu.Items.Add("Start connection", null, async (s, e) => { RestoreWindow(); await Operation(StartServer); });
       menu.Items.Add("Stop connection", null, async (s, e) => { if (!busy) await StopServer(); });
       menu.Items.Add("Copy MCP URL", null, (s, e) => { if (copyUrl.Enabled) copyUrl.PerformClick(); else { RestoreWindow(); ShowStep(2); } });
