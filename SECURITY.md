@@ -50,11 +50,28 @@ These are inherent to what the tool is, not bugs:
 
 ## Deployment guidance
 
-- **Local stdio only.** This server speaks stdio and is intended to be launched as a child
-  process by a local MCP client. It deliberately implements no HTTP transport.
-- **Do not expose it to a network.** Putting a tunnel or HTTP bridge in front of it publishes
-  remote code execution on your machine. If you must, require authentication and understand
-  that you own the consequences.
+- **Stdio is the default.** HTTP mode requires an administrator password and OAuth authorization.
+  Use an HTTPS reverse proxy for public access. See [remote setup](README.md#remote-access-with-oauth).
+- **Remote access grants code execution.** Every authorized client uses the same local account,
+  workspace root, artifacts, and jobs. This is a single-owner service, without tenant isolation.
+- **OAuth protects every MCP request.** The server issues resource-bound access tokens after browser login
+  and PKCE validation. Codes expire after 60 seconds and can be used once.
+  Access tokens expire after 15 minutes. Refresh tokens rotate within a 24-hour authorization lifetime.
+  Refresh token reuse and revocation invalidate all tokens in the same family.
+- **Login approval requires browser binding.** Login forms expire after five minutes and require an HttpOnly,
+  SameSite cookie. HTTPS origins use Secure cookies. Login attempts have a per-IP rate limit.
+  The password is hashed with scrypt in memory and excluded from Codex subprocess environments.
+- **Codex login stays local.** HTTP startup and MCP requests check CLI login status.
+  Successful checks are cached for 30 seconds. This does not verify credentials with OpenAI.
+- **Restart revokes remote access.** Clients, authorization codes, and tokens are held in bounded memory stores.
+  Clients must register and sign in again after a restart.
+- **Tunnel activation is explicit.** `npm run start:tunnel` or `CODEX_MCP_TUNNEL=quick` publishes the OAuth-protected service.
+  The connector targets IPv4 loopback. Activation waits for a public URL and an established connection.
+  The server closes its listener if the connector exits. Shutdown stops both processes.
+  Connector processes receive only selected operating system and network environment settings.
+  A temporary empty configuration prevents existing named tunnel settings from changing the destination.
+- **Interactive login setup is session-only.** Password input is hidden and is not written to a credential file.
+  Environment variables can provide credentials for unattended startup.
 - **Give it its own workspace root.** Point `CODEX_MCP_ROOT` at a dedicated directory, not at
   your source tree or home directory.
 - **Prefer a machine you can rebuild.** For untrusted workloads, run it in a VM or container.

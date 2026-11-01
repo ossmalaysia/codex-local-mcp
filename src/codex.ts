@@ -127,7 +127,39 @@ export function childEnv(): NodeJS.ProcessEnv {
     .filter((entry) => entry && path.isAbsolute(entry))
     .filter((entry, index, all) => all.indexOf(entry) === index)
     .join(path.delimiter);
-  return { ...process.env, PATH: merged, Path: merged };
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: merged, Path: merged };
+  // Remote login credentials must never reach generated code or CLI subprocesses.
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase().startsWith("CODEX_MCP_PASSWORD")) delete env[key];
+  }
+  return env;
+}
+
+/** Check configured credentials through the CLI, without reading its credential files. */
+export async function validateCodexLogin(): Promise<void> {
+  if (!path.isAbsolute(config.codexBin)) throw new CodexNotFoundError(config.codexBin);
+  const windows = process.platform === "win32";
+  const file = windows ? process.env.ComSpec || path.join(systemDir(), "cmd.exe") : config.codexBin;
+  const command = [config.codexBin, "login", "status"].map(quoteForShell).join(" ");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(file, windows ? ["/d", "/s", "/c", `"${command}"`] : ["login", "status"], {
+      cwd: config.root, env: childEnv(), windowsHide: true, windowsVerbatimArguments: windows,
+      detached: !windows, stdio: ["ignore", "ignore", "ignore"],
+    });
+    const timer = setTimeout(() => {
+      if (child.pid) killTree(child.pid);
+      reject(new Error("Codex login validation timed out. Run codex login on the server."));
+    }, 10_000);
+    child.on("error", () => {
+      clearTimeout(timer);
+      reject(new Error("Could not validate Codex login. Check CODEX_BIN."));
+    });
+    child.on("close", code => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error("Codex is not logged in. Run codex login on the server."));
+    });
+  });
 }
 
 /** Keeps the head and tail of a stream without ever holding all of it in memory. */

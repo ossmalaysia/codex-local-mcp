@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 const args = process.argv.slice(2);
+if (args[0] === "login" && args[1] === "status") {
+  process.exit(process.env.FAKE_CODEX_LOGGED_OUT === "1" ? 1 : 0);
+}
 const cdIndex = args.indexOf("--cd");
 const cwd = cdIndex >= 0 ? args[cdIndex + 1] : process.cwd();
 

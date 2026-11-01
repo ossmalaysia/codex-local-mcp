@@ -46,8 +46,8 @@ npm run build
 
 > Full walkthrough with per-OS paths and troubleshooting: **[SETUP.md](SETUP.md)**.
 
-This is a **stdio** server: the client launches it as a child process. There is no URL and
-nothing listens on a port.
+The default transport is **stdio**. The client launches the server as a child process.
+For remote access through an HTTPS endpoint, use [Remote access with OAuth](#remote-access-with-oauth).
 
 Use **absolute paths** for `command` and for `CODEX_BIN`. MCP clients launch servers with a
 minimal environment in which bare `node` and `codex` may not resolve.
@@ -91,6 +91,118 @@ claude mcp add codex -s user -- node /absolute/path/to/codex-local-mcp/dist/inde
 
 Any MCP client that can launch a stdio server works. Point it at
 `node /absolute/path/to/dist/index.js`.
+
+## Remote access with OAuth
+
+HTTP mode exposes `/mcp` through Streamable HTTP. It includes browser login, OAuth discovery,
+dynamic client registration, and authorization codes with PKCE S256.
+
+This mode serves one trusted owner. All authorized clients share the local Codex account,
+jobs, artifacts, and workspace root. It does not provide separate accounts or workspace isolation between clients.
+
+First, run `codex login` on the server machine. Use the same operating system account that starts this server.
+The server checks `codex login status` at startup and before MCP requests, with a 30-second success cache.
+This checks local login status. It does not verify subscription limits or make a live OpenAI request.
+
+### Built-in Cloudflare Tunnel
+
+Install `cloudflared` first. Then run:
+
+```bash
+npm run build
+npm run start:tunnel
+```
+
+The command requests an administrator username and password if `CODEX_MCP_PASSWORD` is not set.
+Password input is hidden. These credentials stay in memory for the current server session.
+Use at least 24 characters for the password.
+Codex keeps its existing local login. You do not enter your OpenAI password into the MCP login page.
+
+The server starts a Cloudflare Quick Tunnel and prints its public `/mcp` URL.
+It also prints the exact `claude mcp add` command.
+OAuth discovery and callbacks use the generated public address automatically.
+No Cloudflare account or domain is required.
+
+Keep the terminal open while you use remote MCP. Press Ctrl+C to stop the server and tunnel.
+If the connector stops unexpectedly, the server closes its listener.
+The next start creates a new public hostname and requires a new client login.
+
+Quick Tunnels are for testing and development. They do not support SSE.
+This server uses JSON responses with Streamable HTTP.
+For a stable hostname, configure a named tunnel separately and use the manual setup below.
+See [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/).
+
+For unattended startup, set `CODEX_MCP_USERNAME` and `CODEX_MCP_PASSWORD` before running the command.
+Alternatively, set `CODEX_MCP_TUNNEL=quick` and run `npm start` with those credentials configured.
+If executable discovery fails, set `CLOUDFLARED_BIN` to the absolute `cloudflared` executable path.
+The built-in tunnel requires a loopback listener. It uses a temporary empty connector configuration.
+It does not modify your existing Cloudflare configuration or forward application credentials to the connector.
+
+### Manual HTTPS setup
+
+Set these variables in PowerShell:
+
+```powershell
+$env:CODEX_MCP_TRANSPORT = "http"
+$env:CODEX_MCP_PUBLIC_URL = "https://codex.example.com"
+$env:CODEX_MCP_USERNAME = "admin"
+$env:CODEX_MCP_PASSWORD = [System.Net.NetworkCredential]::new("", (Read-Host "MCP password (at least 24 characters)" -AsSecureString)).Password
+$env:CODEX_MCP_ROOT = "D:/codex-workspaces"
+# Set CODEX_BIN to your absolute Codex CLI path if required.
+npm run build
+npm start
+```
+
+Use a unique password with at least 24 characters. Passwords cannot exceed 1024 UTF-8 bytes.
+On macOS or Linux, set the same environment variables before running `npm start`.
+
+The listener defaults to `127.0.0.1:3000`. Put an HTTPS reverse proxy or tunnel in front of this listener.
+Forward the entire public origin, including `/authorize`, `/login`, `/register`, `/token`, `/revoke`, and `/.well-known/*`.
+Use an HTTPS origin without a path for `CODEX_MCP_PUBLIC_URL`.
+Manual mode uses your existing HTTPS proxy or tunnel.
+
+For example, Caddy can terminate HTTPS for your configured domain:
+
+```caddyfile
+codex.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Connect Claude Code to the public endpoint:
+
+```bash
+claude mcp add --transport http codex-remote https://codex.example.com/mcp
+```
+
+Run `/mcp` in Claude Code. Select the server and complete its browser login.
+Enter the administrator username and password to approve access.
+For an online session, configure the same public URL in a client that supports remote MCP with OAuth.
+See [Claude Code remote MCP documentation](https://code.claude.com/docs/en/mcp).
+
+Remote OAuth credentials and OpenAI credentials have separate purposes.
+The administrator login approves MCP access. Codex uses its existing local login for task execution.
+The server never forwards OpenAI tokens to MCP clients.
+See [Codex authentication](https://learn.chatgpt.com/docs/auth?surface=cli).
+
+Access tokens expire after 15 minutes. Refresh tokens rotate and expire 24 hours after initial approval.
+Refresh token reuse or token revocation invalidates the entire token family.
+OAuth state is held in memory. Restarting the server requires clients to register and sign in again.
+
+Login permits 10 attempts per client IP every 15 minutes.
+Proxy addresses are not trusted, so clients behind one proxy share this limit.
+Cross-origin browser requests to `/mcp` are refused. Server-side MCP clients do not need browser CORS access.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CODEX_MCP_TRANSPORT` | `stdio` | Set `http` for remote access. |
+| `CODEX_MCP_PUBLIC_URL` | `http://127.0.0.1:3000` | Public HTTPS origin. Loopback HTTP is allowed for local tests. |
+| `CODEX_MCP_HOST` | `127.0.0.1` | Local listener address. |
+| `CODEX_MCP_PORT` | `3000` | Local listener port. |
+| `CODEX_MCP_USERNAME` | `admin` | Administrator login name. |
+| `CODEX_MCP_PASSWORD` | *(required in HTTP mode)* | Administrator password. It is excluded from Codex subprocess environments. |
+| `CODEX_MCP_TUNNEL` | *(disabled)* | Set `quick` to activate a Cloudflare Quick Tunnel with HTTP mode. |
+| `CLOUDFLARED_BIN` | *(executable discovery)* | Absolute connector executable path. |
 
 ## Tools
 
