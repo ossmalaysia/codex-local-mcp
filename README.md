@@ -27,6 +27,48 @@ existing `codex login` is enough.
 - [Codex CLI](https://github.com/openai/codex) installed and logged in
 - Windows, macOS or Linux
 
+## Windows installer
+
+Download the versioned Windows x64 MSI and its SHA256 file from [Releases](https://github.com/ossmalaysia/codex-local-mcp/releases).
+The installer includes Node.js, Codex CLI, Cloudflare Tunnel, and a Windows configuration app.
+It installs for the current Windows user and registers a Start menu shortcut.
+
+Open **Codex Local MCP** from the Start menu. Then:
+
+1. Select a dedicated workspace folder.
+2. Enter your MCP username and password.
+3. Select the Windows sandbox backend.
+4. Select Quick Tunnel or Named Tunnel.
+5. Save the settings.
+6. Select **Sign in to Codex**.
+7. Select **Start tunnel**.
+
+The default backend is MXC. It requires a compatible, updated Windows device.
+The elevated legacy backend requires its own sandbox setup and can need administrator approval.
+The application always uses the isolated permission profile. It never selects full access or the unelevated backend.
+Read-only runtime paths remain available. Private application settings and Codex credentials have an explicit deny rule.
+Command networking is disabled by default. Enable it only when your tasks need network access.
+Codex model authentication still requires an Internet connection.
+
+Before remote startup, a real sandbox check verifies workspace writes and denied private reads and writes.
+When networking is disabled, it also verifies that a local test connection is denied.
+If any check fails, remote startup stops. The check does not call an AI model.
+
+For a named tunnel, enter its HTTPS origin and token.
+Configure the hostname in Cloudflare to route to `http://127.0.0.1:<your listener port>`.
+Passwords and tunnel tokens use Windows DPAPI encryption for the current user.
+Settings and Codex login files are stored under `%LOCALAPPDATA%\CodexLocalMCPData`.
+The workspace must be separate from that folder and the installation folder.
+Updates and uninstall preserve settings and workspaces.
+
+The MSI version, configuration app version, MCP server version, and release manifest use the release tag.
+The manifest records the source commit and bundled tool versions.
+Release builds require a clean checkout of the exact tag.
+The generated MSI is unsigned unless a release operator applies an Authenticode signature.
+
+See [official Windows sandbox documentation](https://learn.chatgpt.com/docs/windows/windows-sandbox)
+and [Codex permission profiles](https://learn.chatgpt.com/docs/permissions).
+
 ## Install
 
 New to this? Follow the **[step-by-step setup guide](SETUP.md)** instead, which covers
@@ -201,7 +243,8 @@ Cross-origin browser requests to `/mcp` are refused. Server-side MCP clients do 
 | `CODEX_MCP_PORT` | `3000` | Local listener port. |
 | `CODEX_MCP_USERNAME` | `admin` | Administrator login name. |
 | `CODEX_MCP_PASSWORD` | *(required in HTTP mode)* | Administrator password. It is excluded from Codex subprocess environments. |
-| `CODEX_MCP_TUNNEL` | *(disabled)* | Set `quick` to activate a Cloudflare Quick Tunnel with HTTP mode. |
+| `CODEX_MCP_TUNNEL` | *(disabled)* | Set `quick` or `named` to activate Cloudflare Tunnel with HTTP mode. |
+| `CODEX_MCP_TUNNEL_TOKEN` | *(named mode only)* | Remotely managed tunnel token. It is excluded from Codex subprocesses. |
 | `CLOUDFLARED_BIN` | *(executable discovery)* | Absolute connector executable path. |
 
 ## Tools
@@ -273,6 +316,10 @@ All optional, set through the client's `env` block.
 | `CODEX_MAX_INLINE_IMAGE_BYTES` | `1048576` | Above this, a downscaled preview is inlined instead. |
 | `CODEX_MAX_REPORTED_FILES` | `200` | Cap on reported changed files. |
 | `CODEX_NETWORK_ACCESS` | `true` | Set `false` to deny Codex the network. |
+| `CODEX_SANDBOX_MODE` | `workspace-write` | Use `isolated` for workspace-only reads plus runtime paths, or `read-only` to refuse writes. The installer uses `isolated`. |
+| `CODEX_WINDOWS_SANDBOX` | *(Codex default)* | Select `mxc` or `elevated`. An explicit selection cannot fall back to another implementation. |
+| `CODEX_RUNTIME_ROOT` | *(none)* | Read-only runtime directory for the isolated profile. Set by the Windows app. |
+| `CODEX_PRIVATE_ROOT` | *(none)* | Private directory denied to sandboxed commands. Set by the Windows app. |
 | `CODEX_WAIT_SEC` | `45` | How long a call waits before returning a `job_id`. Capped at 50. |
 | `CODEX_MAX_RUNNING_JOBS` | `4` | How many Codex jobs may run at once. |
 | `CODEX_JOB_RETENTION_SEC` | `3600` | How long a finished job's result stays retrievable. |
@@ -280,8 +327,10 @@ All optional, set through the client's `env` block.
 
 ## How it works
 
-Codex runs as `--sandbox workspace-write`: it can read and write **only inside the workspace
-folder**, plus reach the network. Workspace names that would escape the root are refused.
+The default `workspace-write` policy restricts command writes to the workspace but permits broader host reads.
+The `isolated` profile permits workspace access and required read-only runtime paths.
+The Windows app uses that stricter profile with explicit private-directory denial and verifies it before startup.
+Workspace names that would escape the root are refused.
 
 A few decisions worth knowing about:
 

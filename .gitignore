@@ -1,5 +1,8 @@
 node_modules/
 dist/
+artifacts/
+installer/**/bin/
+installer/**/obj/
 *.log
 
 # Personal agent instructions (tool routing, local preferences) - never published

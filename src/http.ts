@@ -89,7 +89,8 @@ export function createHttpApp(options: HttpOptions, checkLogin = validateCodexLo
   return app;
 }
 
-export async function startHttpServer(activation: { tunnel?: boolean; setupLogin?: boolean } = {}): Promise<void> {
+export async function startHttpServer(activation: { tunnel?: boolean; setupLogin?: boolean; signal?: AbortSignal } = {}): Promise<void> {
+  if (activation.signal?.aborted) return;
   let options = httpOptions();
   if (activation.tunnel && !["127.0.0.1", "localhost"].includes(options.host)) {
     throw new Error("Built-in Cloudflare Tunnel requires CODEX_MCP_HOST=127.0.0.1 or localhost.");
@@ -101,6 +102,7 @@ export async function startHttpServer(activation: { tunnel?: boolean; setupLogin
   const app = createHttpApp(options);
   await fs.mkdir(config.root, { recursive: true });
   await validateCodexLogin();
+  if (activation.signal?.aborted) return;
   let handler: RequestListener = activation.tunnel
     ? (_req, res) => { res.writeHead(503); res.end("Tunnel activation in progress."); }
     : app;
@@ -117,6 +119,7 @@ export async function startHttpServer(activation: { tunnel?: boolean; setupLogin
     await tunnel?.stop();
   };
   const onSignal = () => { void stop(); };
+  activation.signal?.addEventListener("abort", onSignal, { once: true });
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, onSignal);
   try {
     await new Promise<void>((resolve, reject) => {
@@ -125,7 +128,9 @@ export async function startHttpServer(activation: { tunnel?: boolean; setupLogin
     });
     if (activation.tunnel) {
       console.error("Activating Cloudflare Tunnel...");
-      tunnel = await startQuickTunnel({ port: options.port, signal: activationController.signal });
+      const named = process.env.CODEX_MCP_TUNNEL === "named";
+      tunnel = await startQuickTunnel({ port: options.port, signal: activationController.signal,
+        ...(named ? { mode: "named", token: process.env.CODEX_MCP_TUNNEL_TOKEN, publicUrl: options.publicUrl } : {}) });
       if (stopped) { await tunnel.stop(); return; }
       options.publicUrl = tunnel.publicUrl;
       handler = createHttpApp(options);
@@ -143,5 +148,6 @@ export async function startHttpServer(activation: { tunnel?: boolean; setupLogin
   } finally {
     await stop();
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.off(signal, onSignal);
+    activation.signal?.removeEventListener("abort", onSignal);
   }
 }

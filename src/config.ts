@@ -67,6 +67,10 @@ export const config = {
   maxReportedFiles: num("CODEX_MAX_REPORTED_FILES", 200),
   /** Image APIs need the network; workspace-write blocks it unless we opt in. */
   networkAccess: process.env.CODEX_NETWORK_ACCESS !== "false",
+  sandboxMode: process.env.CODEX_SANDBOX_MODE || "workspace-write",
+  windowsSandbox: process.env.CODEX_WINDOWS_SANDBOX || "",
+  runtimeRoot: process.env.CODEX_RUNTIME_ROOT || "",
+  privateRoot: process.env.CODEX_PRIVATE_ROOT || "",
   /**
    * How long a tool call waits for its job before answering "still running".
    * Must stay under the 60-second request timeout that MCP clients built on

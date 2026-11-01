@@ -4,7 +4,8 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-export type TunnelOptions = { port: number; bin?: string; timeoutMs?: number; signal?: AbortSignal };
+export type TunnelOptions = { port: number; bin?: string; timeoutMs?: number; signal?: AbortSignal;
+  mode?: "quick" | "named"; token?: string; publicUrl?: URL };
 export type Tunnel = { publicUrl: URL; closed: Promise<void>; stop(): Promise<void> };
 type SpawnTunnel = (bin: string, args: string[], env: NodeJS.ProcessEnv) => ChildProcess;
 
@@ -48,6 +49,11 @@ export async function startQuickTunnel(
   }),
 ): Promise<Tunnel> {
   const bin = resolveCloudflared(options.bin);
+  const named = options.mode === "named";
+  if (named && (!options.token || !options.publicUrl || options.publicUrl.protocol !== "https:" ||
+      options.publicUrl.pathname !== "/" || options.publicUrl.search || options.publicUrl.hash || options.publicUrl.username || options.publicUrl.password)) {
+    throw new Error("Named tunnels require CODEX_MCP_TUNNEL_TOKEN and an HTTPS origin in CODEX_MCP_PUBLIC_URL.");
+  }
   if (options.signal?.aborted) throw new Error("Tunnel activation cancelled.");
   // An explicit empty configuration prevents an existing named tunnel from changing the destination.
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-mcp-tunnel-"));
@@ -59,8 +65,11 @@ export async function startQuickTunnel(
   let child: ChildProcess;
   try {
     await fsp.writeFile(configFile, "{}\n", { mode: 0o600 });
-    const args = ["tunnel", "--config", configFile, "--no-autoupdate", "--url", `http://127.0.0.1:${options.port}`];
-    child = launch(bin, args, tunnelEnv());
+    const args = ["tunnel", "--config", configFile, "--no-autoupdate",
+      ...(named ? ["run"] : ["--url", `http://127.0.0.1:${options.port}`])];
+    const env = tunnelEnv();
+    if (named) env.TUNNEL_TOKEN = options.token;
+    child = launch(bin, args, env);
   } catch (error) { await removeConfig(); throw error; }
   let stopping = false;
   let closed = false;
@@ -80,7 +89,7 @@ export async function startQuickTunnel(
   try {
     const publicUrl = await new Promise<URL>((resolve, reject) => {
       let buffer = "";
-      let url: URL | undefined;
+      let url: URL | undefined = named ? options.publicUrl : undefined;
       let connected = false;
       const timer = setTimeout(() => fail("Cloudflare Tunnel activation timed out. Check outbound network access."), options.timeoutMs ?? 45_000);
       const onAbort = () => fail("Tunnel activation cancelled.");

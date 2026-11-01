@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { config } from "./config.js";
+import { sandboxArguments } from "./sandbox.js";
 
 export interface RunOptions {
   prompt: string;
@@ -46,15 +47,10 @@ function buildArgs(opts: RunOptions): string[] {
     "exec",
     "--cd",
     opts.cwd,
-    "--sandbox",
-    "workspace-write",
+    ...sandboxArguments(config.sandboxMode, config.windowsSandbox, config.networkAccess, process.platform, config.runtimeRoot, config.privateRoot),
     // Workspaces are plain folders, not repos; without this codex refuses to run.
     "--skip-git-repo-check",
   ];
-  if (config.networkAccess) {
-    // workspace-write denies network by default, but image APIs need it.
-    args.push("-c", "sandbox_workspace_write.network_access=true");
-  }
   const model = opts.model || config.model;
   if (model) {
     if (!SAFE_MODEL.test(model)) throw new UnsafeArgumentError(model);
@@ -75,7 +71,7 @@ function systemDir(): string {
  * children. Both the launch failure and the exit status are handled here: an
  * unhandled child "error" event would terminate this server.
  */
-function killTree(pid: number): void {
+export function killTree(pid: number): void {
   if (process.platform === "win32") {
     const killer = spawn(
       path.join(systemDir(), "taskkill.exe"),
@@ -130,7 +126,7 @@ export function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: merged, Path: merged };
   // Remote login credentials must never reach generated code or CLI subprocesses.
   for (const key of Object.keys(env)) {
-    if (key.toUpperCase().startsWith("CODEX_MCP_PASSWORD")) delete env[key];
+    if (/^(CODEX_MCP_PASSWORD|CODEX_MCP_TUNNEL_TOKEN|TUNNEL_TOKEN)/i.test(key)) delete env[key];
   }
   return env;
 }
@@ -139,11 +135,12 @@ export function childEnv(): NodeJS.ProcessEnv {
 export async function validateCodexLogin(): Promise<void> {
   if (!path.isAbsolute(config.codexBin)) throw new CodexNotFoundError(config.codexBin);
   const windows = process.platform === "win32";
-  const file = windows ? process.env.ComSpec || path.join(systemDir(), "cmd.exe") : config.codexBin;
+  const useCmd = windows && !config.codexBin.toLowerCase().endsWith(".exe");
+  const file = useCmd ? process.env.ComSpec || path.join(systemDir(), "cmd.exe") : config.codexBin;
   const command = [config.codexBin, "login", "status"].map(quoteForShell).join(" ");
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(file, windows ? ["/d", "/s", "/c", `"${command}"`] : ["login", "status"], {
-      cwd: config.root, env: childEnv(), windowsHide: true, windowsVerbatimArguments: windows,
+    const child = spawn(file, useCmd ? ["/d", "/s", "/c", `"${command}"`] : ["login", "status"], {
+      cwd: config.root, env: childEnv(), windowsHide: true, windowsVerbatimArguments: useCmd,
       detached: !windows, stdio: ["ignore", "ignore", "ignore"],
     });
     const timer = setTimeout(() => {
@@ -202,14 +199,15 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
   }
 
   const isWindows = process.platform === "win32";
+  const useCmd = isWindows && !config.codexBin.toLowerCase().endsWith(".exe");
   const started = Date.now();
 
-  const file = isWindows ? process.env.ComSpec || path.join(systemDir(), "cmd.exe") : config.codexBin;
+  const file = useCmd ? process.env.ComSpec || path.join(systemDir(), "cmd.exe") : config.codexBin;
   const commandLine = [config.codexBin, ...rawArgs].map(quoteForShell).join(" ");
   // /d skips AutoRun scripts, /c runs and exits. The outer quotes matter: with
   // /s cmd strips the first and last quote of the line, so an unwrapped line
   // whose first argument is quoted loses the closing quote of a *different* one.
-  const args = isWindows ? ["/d", "/s", "/c", `"${commandLine}"`] : rawArgs;
+  const args = useCmd ? ["/d", "/s", "/c", `"${commandLine}"`] : rawArgs;
   const command = isWindows ? commandLine : `${config.codexBin} ${rawArgs.join(" ")}`;
 
   return new Promise((resolve, reject) => {
@@ -218,7 +216,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
       // includes the working directory, and Codex can write to its workspace.
       // Codex gets its own working directory from --cd instead.
       cwd: config.root,
-      windowsVerbatimArguments: isWindows,
+      windowsVerbatimArguments: useCmd,
       detached: !isWindows,
       windowsHide: true,
       env: childEnv(),

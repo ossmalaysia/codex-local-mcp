@@ -38,6 +38,7 @@
   "engines": {
     "node": ">=20"
   },
+  "workspaces": ["scripts/disabled-npm-plugin"],
   "license": "MIT",
   "author": "OSS Malaysia",
   "homepage": "https://github.com/ossmalaysia/codex-local-mcp#readme",

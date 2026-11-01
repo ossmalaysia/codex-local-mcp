@@ -14,6 +14,21 @@ function connector() {
 }
 
 describe("built-in Cloudflare Tunnel", () => {
+  it("runs a named tunnel without placing the token in command arguments", async () => {
+    const child = connector();
+    const token = "private-test-token";
+    const tunnel = await startQuickTunnel({ port: 3210, bin: process.execPath, mode: "named", token, publicUrl: new URL("https://codex.example.com") }, (_bin, args, env) => {
+      expect(args).toContain("run");
+      expect(args.join(" ")).not.toContain(token);
+      expect(env.TUNNEL_TOKEN).toBe(token);
+      expect(env.CODEX_MCP_PASSWORD).toBeUndefined();
+      setImmediate(() => child.stderr.write("INF Registered tunnel connection connIndex=0\n"));
+      return child as unknown as ChildProcess;
+    });
+    expect(tunnel.publicUrl.origin).toBe("https://codex.example.com");
+    await tunnel.stop();
+    await expect(startQuickTunnel({ port: 3210, bin: process.execPath, mode: "named" })).rejects.toThrow("require");
+  });
   it("accepts only a generated HTTPS origin", () => {
     expect(quickTunnelUrl(" | https://calm-blue-fox.trycloudflare.com | ")?.href).toBe("https://calm-blue-fox.trycloudflare.com/");
     for (const text of ["http://calm-blue-fox.trycloudflare.com", "https://calm.trycloudflare.com.attacker.example", "https://calm.trycloudflare.com/path"]) {

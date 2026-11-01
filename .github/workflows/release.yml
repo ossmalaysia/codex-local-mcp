@@ -16,6 +16,9 @@ jobs:
   release:
     name: semantic-release
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
     permissions:
       contents: write # create the tag and the GitHub Release
       issues: write # open an issue if a release fails
@@ -33,6 +36,7 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - run: npm audit --audit-level=moderate
 
       - name: Build and test the exact commit being released
         run: |
@@ -42,6 +46,42 @@ jobs:
       # Releases are tags plus GitHub Releases only. Nothing is committed back:
       # main is protected, and the workflow token deliberately cannot bypass it.
       - name: Release
+        id: release
         run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  windows-installer:
+    name: Windows x64 installer
+    needs: release
+    if: needs.release.outputs.version != ''
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Build versioned installer from the release tag
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: ./scripts/build-windows.ps1 -Version $env:RELEASE_VERSION -Release
+      - name: Install, verify, and uninstall the MSI
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: ./scripts/test-windows-installer.ps1 -Version $env:RELEASE_VERSION
+      - name: Attach installer and SHA256 to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: gh release upload $env:RELEASE_TAG "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.msi" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.msi.sha256" --clobber
