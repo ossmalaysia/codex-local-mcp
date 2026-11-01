@@ -209,7 +209,7 @@ pub async fn download_with_progress(
     }
     result
 }
-pub fn launch(installer: &Path, install: &Path) -> Result<()> {
+pub fn launch(installer: &Path, install: &Path, connected: bool) -> Result<()> {
     secure::no_links(installer)?;
     secure::no_links(install)?;
     ensure!(
@@ -220,15 +220,33 @@ pub fn launch(installer: &Path, install: &Path) -> Result<()> {
     // The verified installer provides progress, staging, rollback, and uninstall registration.
     runtime::command(installer)
         .kill_on_drop(false)
-        .arg("--target")
-        .arg(install)
+        .args(launch_args(install, connected))
         .spawn()?;
     Ok(())
+}
+/// Setup reopens the app with `--resume-connection` only when the connection
+/// was running, so an update does not leave Claude disconnected.
+fn launch_args(install: &Path, connected: bool) -> Vec<std::ffi::OsString> {
+    vec![
+        "--target".into(),
+        install.into(),
+        "--connection".into(),
+        if connected { "running" } else { "stopped" }.into(),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Manifest, REPOSITORY, verify_with_key};
+    use super::{Manifest, REPOSITORY, launch_args, verify_with_key};
+    #[test]
+    fn setup_receives_the_connection_state() {
+        let install = std::path::Path::new(r"C:\Program Files\Codex Local MCP");
+        let running = launch_args(install, true);
+        assert_eq!(running[0], "--target");
+        assert_eq!(running[1], install.as_os_str());
+        assert_eq!(running[2..], ["--connection", "running"]);
+        assert_eq!(launch_args(install, false)[3], "stopped");
+    }
     #[test]
     fn signed_metadata_rejects_tampering_wrong_key_rollback_and_foreign_urls() {
         let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();

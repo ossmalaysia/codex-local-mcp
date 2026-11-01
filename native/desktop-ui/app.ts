@@ -497,6 +497,18 @@ async function refresh() {
       if (current.connection?.running) show("activity");
     }
     $("version").textContent = `Version ${current.version} · Rust`;
+    // Reported once by the service after an update restarted the connection.
+    const resumed = current.resumed;
+    if (resumed?.ok) {
+      show("activity");
+      notice(
+        `Updated to version ${current.version}. The connection started again.`,
+      );
+    } else if (resumed)
+      notice(
+        `Updated to version ${current.version}, but the connection did not start again: ${resumed.error}`,
+        true,
+      );
     render(current.connection);
     const update = current.update;
     $("install-update").hidden = !update;

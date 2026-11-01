@@ -33,12 +33,31 @@ struct App {
     update: tokio::sync::Mutex<Option<updates::Manifest>>,
     login: AtomicBool,
     quitting: AtomicBool,
+    /// The outcome of reconnecting after an update, reported to the window once.
+    resumed: std::sync::Mutex<Option<Value>>,
 }
 #[tauri::command]
 async fn state(app: State<'_, Arc<App>>, handle: tauri::AppHandle) -> Reply<Value> {
+    let resumed = app.resumed.lock().unwrap().take();
     Ok(
-        json!({"settings":app.settings.lock().await.view(),"connection":app.controller.view(),"version":handle.package_info().version.to_string(),"update":app.update.lock().await.as_ref().map(|u|json!({"version":u.version}))}),
+        json!({"settings":app.settings.lock().await.view(),"connection":app.controller.view(),"version":handle.package_info().version.to_string(),"update":app.update.lock().await.as_ref().map(|u|json!({"version":u.version})),"resumed":resumed}),
     )
+}
+/// Starts the connection again after an update. Incomplete settings are not
+/// an error here: the user simply starts the connection after finishing setup.
+async fn resume(app: &App) {
+    let s = app.settings.lock().await.clone();
+    if s.validate(&app.controller.install, true).is_err() {
+        return;
+    }
+    let result = match cloudflare::reconcile(&s).await {
+        Ok(()) => app.controller.start(s).await,
+        Err(e) => Err(e),
+    };
+    *app.resumed.lock().unwrap() = Some(match result {
+        Ok(()) => json!({"ok":true}),
+        Err(e) => json!({"ok":false,"error":error(e)}),
+    });
 }
 #[tauri::command]
 async fn save_settings(input: Input, app: State<'_, Arc<App>>) -> Reply<Value> {
@@ -180,8 +199,9 @@ async fn install_update(app: State<'_, Arc<App>>, handle: tauri::AppHandle) -> R
     })
     .await
     .map_err(error)?;
+    let connected = app.controller.view()["running"] == true;
     app.controller.stop().await.map_err(error)?;
-    updates::launch(&installer, &app.controller.install).map_err(error)?;
+    updates::launch(&installer, &app.controller.install, connected).map_err(error)?;
     app.quitting.store(true, Ordering::SeqCst);
     handle.exit(0);
     Ok(())
@@ -217,7 +237,9 @@ fn run() -> anyhow::Result<()> {
         update: tokio::sync::Mutex::new(None),
         login: AtomicBool::new(false),
         quitting: AtomicBool::new(false),
+        resumed: std::sync::Mutex::new(None),
     });
+    let resume_connection = std::env::args().any(|s| s == "--resume-connection");
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|handle, _, _| {
             show(handle)
@@ -243,7 +265,7 @@ fn run() -> anyhow::Result<()> {
             check_update,
             install_update
         ])
-        .setup(|application| {
+        .setup(move |application| {
             let handle = application.handle();
             let notification_handle = handle.clone();
             handle
@@ -292,6 +314,12 @@ fn run() -> anyhow::Result<()> {
                     _ => (),
                 })
                 .build(application)?;
+            if resume_connection {
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    resume(&handle.state::<Arc<App>>()).await;
+                });
+            }
             let handle = handle.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(15)).await;

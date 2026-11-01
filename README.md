@@ -39,6 +39,8 @@ Close any running copy from its tray menu before installation.
 The app stays in the system tray when its window closes. Select **Exit** from the tray menu to stop it.
 It checks the latest stable GitHub release after startup and every 12 hours. A tray notice appears when an update is available.
 Select **Check for updates**, then **Install update** to download a verified installer. Select **Install** in setup to continue.
+If the connection was running, setup reopens the app and the app starts the connection again. Activity confirms the reconnect.
+A Quick Tunnel gets a new URL on reconnect; a custom domain keeps its URL.
 The Rust app verifies signed update metadata with its pinned public key. It then checks installer size, SHA256, version, and repository.
 Setup stages the application, keeps the previous directory for recovery, and updates the Installed apps entry.
 MCP credentials do not enter the installer environment. Downloads stay in the private application data folder.
