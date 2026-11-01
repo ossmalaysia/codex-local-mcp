@@ -61,7 +61,9 @@ fn save(mut image: image::DynamicImage, stem: &Path, options: &TaskOptions) -> R
         let (w, h) = options.size.split_once('x').unwrap();
         let (w, h) = (w.parse::<u32>()?, h.parse::<u32>()?);
         // Preserve the requested aspect ratio. Never enlarge a generated image.
-        image = image.thumbnail(w, h);
+        if image.width() > w || image.height() > h {
+            image = image.thumbnail(w, h);
+        }
     }
     let path = stem.with_extension(if options.output_format == "jpeg" {
         "jpg"
@@ -133,5 +135,12 @@ mod tests {
         assert!(output.metadata().unwrap().len() < 32 * 1024);
         assert!(collect(home.path(), "../escape", dir.path(), &options).is_err());
         assert!(cache.join("image.png").is_file());
+    }
+    #[test]
+    fn keeps_small_images_at_their_original_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = image::DynamicImage::ImageRgb8(image::RgbImage::new(16, 12));
+        let path = save(image, &dir.path().join("small"), &TaskOptions::default()).unwrap();
+        assert_eq!(image::image_dimensions(&path).unwrap(), (16, 12));
     }
 }
