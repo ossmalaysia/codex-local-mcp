@@ -6,8 +6,15 @@ import { createServer } from "node:net";
 import { mkdir, mkdtemp, readFile, access } from "node:fs/promises";
 import path from "node:path";
 import assert from "node:assert/strict";
+const mode = process.argv[2] ?? "clean";
+assert.ok(
+  ["clean", "legacy"].includes(mode),
+  "Choose the clean or legacy test fixture",
+);
 const app = path.resolve(
-  process.argv[2] ?? "artifacts/native-desktop-0.7.0/payload/CodexMCP.exe",
+  mode === "legacy"
+    ? "artifacts/legacy-upgrade-test-0.5/CodexMCP.exe"
+    : "artifacts/native-desktop-0.7.0/payload/CodexMCP.exe",
 );
 const root = await mkdtemp(path.resolve("artifacts/desktop-native-test-"));
 const listener = createServer();

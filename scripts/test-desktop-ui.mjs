@@ -15,16 +15,12 @@ const server = createServer(async (req, res) => {
     res.writeHead(404).end();
     return;
   }
-  res.setHeader(
-    "Content-Type",
-    name.endsWith(".js")
-      ? "text/javascript"
-      : name.endsWith(".css")
-        ? "text/css"
-        : name.endsWith(".png")
-          ? "image/png"
-          : "text/html",
-  );
+  const mime = {
+    "app.js": "text/javascript",
+    "style.css": "text/css",
+    "logo.png": "image/png",
+  };
+  res.setHeader("Content-Type", mime[name] ?? "text/html");
   res.end(await readFile(`native/desktop-ui/dist/${name}`));
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -110,7 +106,7 @@ try {
               update = { version: "0.8.0" };
               return { available: true, update };
             case "sandbox_check":
-              throw "Sandbox check failed: test error";
+              throw new Error("Sandbox check failed: test error");
             case "copy_password":
               return;
             default:

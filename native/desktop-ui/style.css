@@ -221,6 +221,7 @@ button:disabled {
   color: #925409;
 }
 #notice {
+  display: block;
   position: sticky;
   top: 12px;
   z-index: 2;
@@ -285,7 +286,7 @@ li {
   clip-path: inset(50%);
 }
 [hidden] {
-  display: none !important;
+  display: none;
 }
 @media (max-width: 950px) {
   aside {
@@ -310,4 +311,8 @@ li {
   button {
     transition: none;
   }
+}
+
+#notice[hidden] {
+  display: none;
 }

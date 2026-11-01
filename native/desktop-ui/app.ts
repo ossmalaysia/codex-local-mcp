@@ -118,11 +118,12 @@ function render(connection: Json) {
       ? settings.publicUrl + "/mcp"
       : "");
   input("endpoint").value = endpoint;
-  $("endpoint-hint").textContent = online
-    ? "Ready to connect in Claude."
-    : endpoint
-      ? "Your saved address is shown. Start the connection before using it."
-      : "Start the connection in step 3 to get your address.";
+  let endpointHint = "Start the connection in step 3 to get your address.";
+  if (endpoint)
+    endpointHint =
+      "Your saved address is shown. Start the connection before using it.";
+  if (online) endpointHint = "Ready to connect in Claude.";
+  $("endpoint-hint").textContent = endpointHint;
   $<HTMLButtonElement>("copy-url").disabled = !endpoint;
   $<HTMLButtonElement>("start").disabled =
     !!connection.running || $("start").hasAttribute("aria-busy");
@@ -206,13 +207,12 @@ async function account() {
     value.signedIn ? "Signed in" : "Not signed in",
     value.signedIn,
   );
-  $("account-detail").textContent = value.signedIn
-    ? value.email
-      ? `Signed in as ${value.email}`
-      : value.method === "apiKey"
-        ? "Signed in with an API key."
-        : "Your OpenAI sign-in is saved."
-    : "Sign in to use Codex. Your browser will open.";
+  let detail = "Sign in to use Codex. Your browser will open.";
+  if (value.signedIn) detail = "Your OpenAI sign-in is saved.";
+  if (value.signedIn && value.method === "apiKey")
+    detail = "Signed in with an API key.";
+  if (value.signedIn && value.email) detail = `Signed in as ${value.email}`;
+  $("account-detail").textContent = detail;
   $("account-login").textContent = value.signedIn
     ? "Sign in with another account"
     : "Sign in to OpenAI";
@@ -347,14 +347,23 @@ void window.__TAURI__.event.listen("update-check", (event) => {
 void window.__TAURI__.event.listen("update-error", (event) =>
   notice(String(event.payload), true),
 );
-void refresh().then(() => {
-  void account().catch((e) => {
+async function loadAccount() {
+  try {
+    await account();
+  } catch (e) {
     $("openai-state").textContent = "Check sign-in";
     $("account-detail").textContent = String(e);
-  });
-  void invoke("cloudflare_status")
-    .then(domains)
-    .catch(() => {});
-});
+  }
+}
+async function loadCloudflare() {
+  try {
+    domains(await invoke("cloudflare_status"));
+  } catch {
+    $("cloudflare-state").textContent = "Sign-in unavailable";
+  }
+}
+await refresh();
+void loadAccount();
+void loadCloudflare();
 setInterval(() => void refresh(), 1000);
 export {};

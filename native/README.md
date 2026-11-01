@@ -35,7 +35,7 @@ node scripts/build-desktop-ui.mjs
 cargo clippy --locked -p codex-mcp-desktop --all-targets -- -D warnings
 ./scripts/build-native-desktop.ps1 -Version 0.7.0
 ./scripts/test-windows-setup.ps1 -Version 0.7.0
-node scripts/test-native-desktop.mjs artifacts/native-desktop-0.7.0/payload/CodexMCP.exe
+node scripts/test-native-desktop.mjs clean
 ```
 
 This produces a normal per-user setup EXE under `artifacts`. No file copying is required from the user.

@@ -244,21 +244,7 @@ impl Controller {
             if !within(&path, root) {
                 return;
             }
-            let mut tasks = self.tasks.lock().unwrap();
-            if let Some(existing) = tasks.iter_mut().find(|v| v["id"] == id) {
-                for (key, value) in event.as_object().unwrap() {
-                    existing[key] = value.clone();
-                }
-            } else {
-                if tasks.len() >= 100 {
-                    if let Some(i) = tasks.iter().position(|v| v["status"] != "running") {
-                        tasks.remove(i);
-                    } else {
-                        return;
-                    }
-                }
-                tasks.push_front(event);
-            }
+            self.merge_job(&event, id);
         } else if let Some(rest) = line.strip_prefix("codex-local-mcp ready: ") {
             if let Some(url) = rest
                 .split_whitespace()
@@ -284,6 +270,23 @@ impl Controller {
                 "Error: {}",
                 line.chars().take(300).collect::<String>()
             ));
+        }
+    }
+    fn merge_job(&self, event: &Value, id: &str) {
+        let mut tasks = self.tasks.lock().unwrap();
+        if let Some(existing) = tasks.iter_mut().find(|v| v["id"] == id) {
+            for (key, value) in event.as_object().unwrap() {
+                existing[key] = value.clone();
+            }
+        } else {
+            if tasks.len() >= 100 {
+                if let Some(i) = tasks.iter().position(|v| v["status"] != "running") {
+                    tasks.remove(i);
+                } else {
+                    return;
+                }
+            }
+            tasks.push_front(event.clone());
         }
     }
     pub async fn stop(&self) -> Result<()> {
