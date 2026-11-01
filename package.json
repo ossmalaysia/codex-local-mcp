@@ -10,20 +10,27 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsc -p ui && node scripts/build-ui.mjs",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
+    "start:tunnel": "node dist/index.js --tunnel --setup-login",
     "test": "vitest run",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "pretest": "node scripts/build-ui.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "sharp": "^0.35.4",
-    "zod": "^4.6.5"
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.2",
+    "sharp": "^0.35.5",
+    "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "^2.0.0",
+    "@types/express": "^5.0.0",
     "@types/node": "^26.5.1",
     "conventional-changelog-conventionalcommits": "9.3.1",
+    "esbuild": "^0.28.2",
     "semantic-release": "^25.0.9",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"
@@ -31,6 +38,7 @@
   "engines": {
     "node": ">=20"
   },
+  "workspaces": ["scripts/disabled-npm-plugin"],
   "license": "MIT",
   "author": "OSS Malaysia",
   "homepage": "https://github.com/ossmalaysia/codex-local-mcp#readme",

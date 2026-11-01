@@ -67,6 +67,10 @@ export const config = {
   maxReportedFiles: num("CODEX_MAX_REPORTED_FILES", 200),
   /** Image APIs need the network; workspace-write blocks it unless we opt in. */
   networkAccess: process.env.CODEX_NETWORK_ACCESS !== "false",
+  sandboxMode: process.env.CODEX_SANDBOX_MODE || "workspace-write",
+  windowsSandbox: process.env.CODEX_WINDOWS_SANDBOX || "",
+  runtimeRoot: process.env.CODEX_RUNTIME_ROOT || "",
+  privateRoot: process.env.CODEX_PRIVATE_ROOT || "",
   /**
    * How long a tool call waits for its job before answering "still running".
    * Must stay under the 60-second request timeout that MCP clients built on
@@ -81,4 +85,11 @@ export const config = {
   maxRunningJobs: num("CODEX_MAX_RUNNING_JOBS", 4),
   /** How long a finished job's result stays retrievable. */
   jobRetentionSec: num("CODEX_JOB_RETENTION_SEC", 3600),
+  /**
+   * Advertise the in-chat image view (an MCP App) on codex_generate_image.
+   * Off by default: in Claude Desktop's device-connected chats, declaring the
+   * view stopped image calls from ever reaching this server (two 4-minute
+   * timeouts, no tools/call logged), while the same call without it worked.
+   */
+  mcpAppView: process.env.CODEX_MCP_APP_VIEW === "true",
 };

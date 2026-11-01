@@ -35,6 +35,16 @@ async function load<T>(pkg: string): Promise<T> {
 
 const logger = { log() {} };
 
+describe("GitHub-only release policy", () => {
+  it("refuses npm publication and keeps the version placeholder out of release artifacts", async () => {
+    const config = JSON.parse(fs.readFileSync(".releaserc.json", "utf8"));
+    expect(JSON.stringify(config.plugins)).not.toContain('"@semantic-release/npm"');
+    const guard = require("@semantic-release/npm");
+    expect(() => guard.publish()).toThrow("npm publishing is disabled");
+    expect(config.plugins).toContain("./scripts/release-version.cjs");
+  });
+});
+
 describe.skipIf(!supported)("release tooling", () => {
   it("renders release notes for features and fixes", async () => {
     const { generateNotes } = await load<{

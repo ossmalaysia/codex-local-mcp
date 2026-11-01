@@ -27,6 +27,48 @@ existing `codex login` is enough.
 - [Codex CLI](https://github.com/openai/codex) installed and logged in
 - Windows, macOS or Linux
 
+## Windows installer
+
+Download the versioned Windows x64 MSI and its SHA256 file from [Releases](https://github.com/ossmalaysia/codex-local-mcp/releases).
+The installer includes Node.js, Codex CLI, Cloudflare Tunnel, and a Windows configuration app.
+It installs for the current Windows user and registers a Start menu shortcut.
+
+Open **Codex Local MCP** from the Start menu. Then:
+
+1. Select a dedicated workspace folder.
+2. Enter your MCP username and password.
+3. Select the Windows sandbox backend.
+4. Select Quick Tunnel or Named Tunnel.
+5. Save the settings.
+6. Select **Sign in to Codex**.
+7. Select **Start tunnel**.
+
+The default backend is MXC. It requires a compatible, updated Windows device.
+The elevated legacy backend requires its own sandbox setup and can need administrator approval.
+The application always uses the isolated permission profile. It never selects full access or the unelevated backend.
+Read-only runtime paths remain available. Private application settings and Codex credentials have an explicit deny rule.
+Command networking is disabled by default. Enable it only when your tasks need network access.
+Codex model authentication still requires an Internet connection.
+
+Before remote startup, a real sandbox check verifies workspace writes and denied private reads and writes.
+When networking is disabled, it also verifies that a local test connection is denied.
+If any check fails, remote startup stops. The check does not call an AI model.
+
+For a named tunnel, enter its HTTPS origin and token.
+Configure the hostname in Cloudflare to route to `http://127.0.0.1:<your listener port>`.
+Passwords and tunnel tokens use Windows DPAPI encryption for the current user.
+Settings and Codex login files are stored under `%LOCALAPPDATA%\CodexLocalMCPData`.
+The workspace must be separate from that folder and the installation folder.
+Updates and uninstall preserve settings and workspaces.
+
+The MSI version, configuration app version, MCP server version, and release manifest use the release tag.
+The manifest records the source commit and bundled tool versions.
+Release builds require a clean checkout of the exact tag.
+The generated MSI is unsigned unless a release operator applies an Authenticode signature.
+
+See [official Windows sandbox documentation](https://learn.chatgpt.com/docs/windows/windows-sandbox)
+and [Codex permission profiles](https://learn.chatgpt.com/docs/permissions).
+
 ## Install
 
 New to this? Follow the **[step-by-step setup guide](SETUP.md)** instead, which covers
@@ -46,8 +88,8 @@ npm run build
 
 > Full walkthrough with per-OS paths and troubleshooting: **[SETUP.md](SETUP.md)**.
 
-This is a **stdio** server: the client launches it as a child process. There is no URL and
-nothing listens on a port.
+The default transport is **stdio**. The client launches the server as a child process.
+For remote access through an HTTPS endpoint, use [Remote access with OAuth](#remote-access-with-oauth).
 
 Use **absolute paths** for `command` and for `CODEX_BIN`. MCP clients launch servers with a
 minimal environment in which bare `node` and `codex` may not resolve.
@@ -92,6 +134,119 @@ claude mcp add codex -s user -- node /absolute/path/to/codex-local-mcp/dist/inde
 Any MCP client that can launch a stdio server works. Point it at
 `node /absolute/path/to/dist/index.js`.
 
+## Remote access with OAuth
+
+HTTP mode exposes `/mcp` through Streamable HTTP. It includes browser login, OAuth discovery,
+dynamic client registration, and authorization codes with PKCE S256.
+
+This mode serves one trusted owner. All authorized clients share the local Codex account,
+jobs, artifacts, and workspace root. It does not provide separate accounts or workspace isolation between clients.
+
+First, run `codex login` on the server machine. Use the same operating system account that starts this server.
+The server checks `codex login status` at startup and before MCP requests, with a 30-second success cache.
+This checks local login status. It does not verify subscription limits or make a live OpenAI request.
+
+### Built-in Cloudflare Tunnel
+
+Install `cloudflared` first. Then run:
+
+```bash
+npm run build
+npm run start:tunnel
+```
+
+The command requests an administrator username and password if `CODEX_MCP_PASSWORD` is not set.
+Password input is hidden. These credentials stay in memory for the current server session.
+Use at least 24 characters for the password.
+Codex keeps its existing local login. You do not enter your OpenAI password into the MCP login page.
+
+The server starts a Cloudflare Quick Tunnel and prints its public `/mcp` URL.
+It also prints the exact `claude mcp add` command.
+OAuth discovery and callbacks use the generated public address automatically.
+No Cloudflare account or domain is required.
+
+Keep the terminal open while you use remote MCP. Press Ctrl+C to stop the server and tunnel.
+If the connector stops unexpectedly, the server closes its listener.
+The next start creates a new public hostname and requires a new client login.
+
+Quick Tunnels are for testing and development. They do not support SSE.
+This server uses JSON responses with Streamable HTTP.
+For a stable hostname, configure a named tunnel separately and use the manual setup below.
+See [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/).
+
+For unattended startup, set `CODEX_MCP_USERNAME` and `CODEX_MCP_PASSWORD` before running the command.
+Alternatively, set `CODEX_MCP_TUNNEL=quick` and run `npm start` with those credentials configured.
+If executable discovery fails, set `CLOUDFLARED_BIN` to the absolute `cloudflared` executable path.
+The built-in tunnel requires a loopback listener. It uses a temporary empty connector configuration.
+It does not modify your existing Cloudflare configuration or forward application credentials to the connector.
+
+### Manual HTTPS setup
+
+Set these variables in PowerShell:
+
+```powershell
+$env:CODEX_MCP_TRANSPORT = "http"
+$env:CODEX_MCP_PUBLIC_URL = "https://codex.example.com"
+$env:CODEX_MCP_USERNAME = "admin"
+$env:CODEX_MCP_PASSWORD = [System.Net.NetworkCredential]::new("", (Read-Host "MCP password (at least 24 characters)" -AsSecureString)).Password
+$env:CODEX_MCP_ROOT = "D:/codex-workspaces"
+# Set CODEX_BIN to your absolute Codex CLI path if required.
+npm run build
+npm start
+```
+
+Use a unique password with at least 24 characters. Passwords cannot exceed 1024 UTF-8 bytes.
+On macOS or Linux, set the same environment variables before running `npm start`.
+
+The listener defaults to `127.0.0.1:3000`. Put an HTTPS reverse proxy or tunnel in front of this listener.
+Forward the entire public origin, including `/authorize`, `/login`, `/register`, `/token`, `/revoke`, and `/.well-known/*`.
+Use an HTTPS origin without a path for `CODEX_MCP_PUBLIC_URL`.
+Manual mode uses your existing HTTPS proxy or tunnel.
+
+For example, Caddy can terminate HTTPS for your configured domain:
+
+```caddyfile
+codex.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Connect Claude Code to the public endpoint:
+
+```bash
+claude mcp add --transport http codex-remote https://codex.example.com/mcp
+```
+
+Run `/mcp` in Claude Code. Select the server and complete its browser login.
+Enter the administrator username and password to approve access.
+For an online session, configure the same public URL in a client that supports remote MCP with OAuth.
+See [Claude Code remote MCP documentation](https://code.claude.com/docs/en/mcp).
+
+Remote OAuth credentials and OpenAI credentials have separate purposes.
+The administrator login approves MCP access. Codex uses its existing local login for task execution.
+The server never forwards OpenAI tokens to MCP clients.
+See [Codex authentication](https://learn.chatgpt.com/docs/auth?surface=cli).
+
+Access tokens expire after 15 minutes. Refresh tokens rotate and expire 24 hours after initial approval.
+Refresh token reuse or token revocation invalidates the entire token family.
+OAuth state is held in memory. Restarting the server requires clients to register and sign in again.
+
+Login permits 10 attempts per client IP every 15 minutes.
+Proxy addresses are not trusted, so clients behind one proxy share this limit.
+Cross-origin browser requests to `/mcp` are refused. Server-side MCP clients do not need browser CORS access.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CODEX_MCP_TRANSPORT` | `stdio` | Set `http` for remote access. |
+| `CODEX_MCP_PUBLIC_URL` | `http://127.0.0.1:3000` | Public HTTPS origin. Loopback HTTP is allowed for local tests. |
+| `CODEX_MCP_HOST` | `127.0.0.1` | Local listener address. |
+| `CODEX_MCP_PORT` | `3000` | Local listener port. |
+| `CODEX_MCP_USERNAME` | `admin` | Administrator login name. |
+| `CODEX_MCP_PASSWORD` | *(required in HTTP mode)* | Administrator password. It is excluded from Codex subprocess environments. |
+| `CODEX_MCP_TUNNEL` | *(disabled)* | Set `quick` or `named` to activate Cloudflare Tunnel with HTTP mode. |
+| `CODEX_MCP_TUNNEL_TOKEN` | *(named mode only)* | Remotely managed tunnel token. It is excluded from Codex subprocesses. |
+| `CLOUDFLARED_BIN` | *(executable discovery)* | Absolute connector executable path. |
+
 ## Tools
 
 | Tool | Arguments | Description |
@@ -102,6 +257,23 @@ Any MCP client that can launch a stdio server works. Point it at
 | `codex_read_artifact` | `path`, `max_bytes?` | Read a file from a workspace. |
 
 Reuse the same `workspace` name across calls to keep working on the same files.
+
+### Images in the chat (experimental, opt-in)
+
+Set `CODEX_MCP_APP_VIEW=true` and, in clients that support
+[MCP Apps](https://modelcontextprotocol.io/extensions/apps), `codex_generate_image` renders an
+image card **inside the chat**. While
+Codex is still working the card shows progress, and it collects the finished image itself, so the
+picture appears even if the model never polls. The card shows a preview; the full-resolution file
+is in the workspace and opens in your default viewer.
+
+Clients without MCP Apps support ignore the card and get the same text, image and link results
+as before.
+
+It is **off by default**. In Claude Desktop chats that reach this server through the desktop
+app's device connection, declaring the card stopped image calls from arriving at all: they timed
+out after four minutes with nothing logged by the server, while the same request without the card
+worked. Until that is resolved, only enable it in a client you have tested it with.
 
 ### Long-running tasks
 
@@ -144,14 +316,21 @@ All optional, set through the client's `env` block.
 | `CODEX_MAX_INLINE_IMAGE_BYTES` | `1048576` | Above this, a downscaled preview is inlined instead. |
 | `CODEX_MAX_REPORTED_FILES` | `200` | Cap on reported changed files. |
 | `CODEX_NETWORK_ACCESS` | `true` | Set `false` to deny Codex the network. |
+| `CODEX_SANDBOX_MODE` | `workspace-write` | Use `isolated` for workspace-only reads plus runtime paths, or `read-only` to refuse writes. The installer uses `isolated`. |
+| `CODEX_WINDOWS_SANDBOX` | *(Codex default)* | Select `mxc` or `elevated`. An explicit selection cannot fall back to another implementation. |
+| `CODEX_RUNTIME_ROOT` | *(none)* | Read-only runtime directory for the isolated profile. Set by the Windows app. |
+| `CODEX_PRIVATE_ROOT` | *(none)* | Private directory denied to sandboxed commands. Set by the Windows app. |
 | `CODEX_WAIT_SEC` | `45` | How long a call waits before returning a `job_id`. Capped at 50. |
 | `CODEX_MAX_RUNNING_JOBS` | `4` | How many Codex jobs may run at once. |
 | `CODEX_JOB_RETENTION_SEC` | `3600` | How long a finished job's result stays retrievable. |
+| `CODEX_MCP_APP_VIEW` | `false` | Show generated images in the chat as an MCP App card. Experimental; see above. |
 
 ## How it works
 
-Codex runs as `--sandbox workspace-write`: it can read and write **only inside the workspace
-folder**, plus reach the network. Workspace names that would escape the root are refused.
+The default `workspace-write` policy restricts command writes to the workspace but permits broader host reads.
+The `isolated` profile permits workspace access and required read-only runtime paths.
+The Windows app uses that stricter profile with explicit private-directory denial and verifies it before startup.
+Workspace names that would escape the root are refused.
 
 A few decisions worth knowing about:
 

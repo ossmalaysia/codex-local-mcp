@@ -4,6 +4,7 @@
   "plugins": [
     ["@semantic-release/commit-analyzer", { "preset": "conventionalcommits" }],
     ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
+    "./scripts/release-version.cjs",
     ["@semantic-release/github", { "successComment": false, "releasedLabels": false }]
   ]
 }

@@ -22,6 +22,19 @@ function promptSeenByCodex(workspace: string): string {
   return fs.readFileSync(path.join(root, workspace, "notes.txt"), "utf8");
 }
 
+describe("the in-chat view is opt-in", () => {
+  it("is not advertised unless CODEX_MCP_APP_VIEW=true", async () => {
+    // Declaring it stopped image calls reaching the server in Claude Desktop's
+    // device-connected chats, so the default must leave it off.
+    const { tools } = await mcp.client().listTools();
+    const image = tools.find((t) => t.name === "codex_generate_image");
+    expect(image?._meta?.ui).toBeUndefined();
+
+    const { resources } = await mcp.client().listResources();
+    expect(resources.map((r) => r.uri)).not.toContain("ui://codex-local-mcp/image-viewer.html");
+  });
+});
+
 describe("size and quality reach Codex", () => {
   it("passes the requested size and quality through to the prompt", async () => {
     const result = await generate({ workspace: "sized", size: "800x600", quality: "high" });

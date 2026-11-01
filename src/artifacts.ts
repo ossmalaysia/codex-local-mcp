@@ -74,6 +74,9 @@ export async function openConfined(abs: string): Promise<ConfinedFile> {
     if (named.ino !== opened.ino || named.dev !== opened.dev) {
       throw new ConfinementError(`refusing "${abs}": it was replaced while being opened`);
     }
+    // Recheck resolved parents too: O_NOFOLLOW only protects the final component.
+    const after = await assertInsideRoot(real);
+    if (after !== real) throw new ConfinementError(`refusing "${abs}": a parent directory changed while opening`);
 
     return { handle, size: Number(opened.size), real };
   } catch (err) {

@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-01",
+  "scope": ["Remote MCP HTTP transport", "OAuth owner login", "Cloudflare connector lifecycle", "Codex command permissions", "Windows configuration and installer", "Production and development dependencies"],
+  "findings": [
+    {"id":"AUDIT-001","severity":"high","status":"fixed","issue":"Disabling command networking did not override an inherited true setting.","resolution":"Always pass the explicit network boolean to the selected command sandbox.","evidence":"test/sandbox.test.ts and a real MXC network-denial probe"},
+    {"id":"AUDIT-002","severity":"high","status":"fixed","issue":"workspace-write was described as restricting all host reads.","resolution":"Correct documentation. Add an isolated permission profile and explicit private-directory denial. The Windows app requires that profile and a real startup probe.","evidence":"src/sandbox.ts, src/sandbox-probe.ts, and the Windows manager startup gate"},
+    {"id":"AUDIT-003","severity":"critical","status":"fixed","issue":"Development dependencies included vulnerable versions, including a template compiler and an unused bundled npm publisher.","resolution":"Update compatible transitive dependencies. Replace the unused npm publisher with a reviewed local workspace guard that refuses publication. Retain semantic-release for GitHub releases.","evidence":"npm audit --audit-level=moderate reports zero vulnerabilities"},
+    {"id":"AUDIT-004","severity":"medium","status":"fixed","issue":"Parent-directory replacement needed an additional artifact path check.","resolution":"Revalidate resolved parent confinement after opening and comparing file identity.","evidence":"src/artifacts.ts and existing artifact confinement tests"},
+    {"id":"AUDIT-005","severity":"medium","status":"fixed","issue":"A Windows distribution needed protected credentials and release-specific version metadata.","resolution":"Use per-user DPAPI and a restricted data directory. Stamp MSI, manager, runtime package, and manifest from the release tag. Pin downloaded binary hashes.","evidence":"installer/windows/Manager/Program.cs and scripts/build-windows.ps1"},
+    {"id":"AUDIT-006","severity":"high","status":"fixed","issue":"An unresolved CLI name could fall back to executable lookup in a writable root.","resolution":"Refuse task execution unless the configured CLI path is absolute. Installed Windows execution uses the bundled native executable.","evidence":"test/missing-cli.test.ts plants a replacement command and verifies that it is not executed"}
+  ],
+  "validation": {
+    "dependencyAudit":"Full production and development audit; zero findings",
+    "unitAndIntegration":"npm test -- --maxWorkers=2; release-tool tests also run under Node 24",
+    "realSandbox":"MXC: workspace writes succeed; private reads, generic outside-host reads, private writes, and disabled networking are denied",
+    "remoteTransport":"Live Cloudflare OAuth and MCP check completed before installer work; named-token lifecycle has automated tests",
+    "installer":"Install, DPAPI and version self-test, bundled executable checks, and uninstall are required before release upload"
+  },
+  "limits": [
+    "This is a single-owner service. Authorized clients share Codex jobs and workspace artifacts.",
+    "The generic workspace-write mode permits broader host reads. The Windows app uses isolated mode.",
+    "Native OS process isolation depends on the installed Codex version and Windows capabilities.",
+    "Read-only runtime paths remain visible. This is not a complete independent penetration test.",
+    "The MSI is unsigned without an operator-supplied signing certificate.",
+    "Quick Tunnel hostnames change across sessions. Named tunnel routing must be configured in Cloudflare."
+  ]
+}

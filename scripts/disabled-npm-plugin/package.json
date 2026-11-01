@@ -1,0 +1,7 @@
+{
+  "name": "@semantic-release/npm",
+  "version": "13.2.0",
+  "private": true,
+  "main": "index.cjs",
+  "description": "Fail-closed replacement for the unused npm publisher in this GitHub-only release project."
+}
