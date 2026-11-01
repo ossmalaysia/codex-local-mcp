@@ -15,7 +15,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot read source commit' }
 if ($Release) {
   $tagSha = (& git -c "safe.directory=$projectRoot" rev-list -n 1 "v$Version").Trim()
   if ($LASTEXITCODE -ne 0 -or $tagSha -ne $sha) { throw 'Release installer must be built from its exact version tag' }
-  if (& git -c "safe.directory=$projectRoot" status --porcelain --untracked-files=no) { throw 'Release source checkout must be clean' }
+  if (& git -c "safe.directory=$projectRoot" status --porcelain) { throw 'Release source checkout must be clean' }
 }
 $dependencies = Get-Content -LiteralPath 'installer/windows/dependencies.json' -Raw | ConvertFrom-Json
 function Download-Checked($Item, [string]$Destination) {
@@ -105,6 +105,11 @@ function DirectoryXml([string]$Directory, [string]$Relative) {
     [void]$result.Append('<File Id="' + $fileKey + '" Source="' + (Xml $file.FullName) + '">' + $shortcut + '</File>')
   }
   [void]$result.Append('<RemoveFolder Id="R' + $componentId + '" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP\Files" Name="' + $componentId + '" Value="1" Type="integer" KeyPath="yes" /></Component>')
+  if ($Relative -eq '') {
+    # Remember command-line install locations for maintenance, upgrades, and uninstall.
+    [void]$result.Append('<Component Id="InstallLocation" Guid="E4F69D69-6442-435D-B775-370AA5F709E4"><RegistryValue Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP" Name="InstallLocation" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" /></Component>')
+    $components.Add('<ComponentRef Id="InstallLocation" />')
+  }
   $components.Add('<ComponentRef Id="C' + $componentId + '" />')
   foreach ($child in Get-ChildItem -LiteralPath $Directory -Directory | Sort-Object Name) {
     $relativeChild = ($Relative + '/' + $child.Name).TrimStart('/')
@@ -120,6 +125,7 @@ $wxs = @"
  <Package Name="Codex Local MCP" Manufacturer="OSS Malaysia" Version="$Version" UpgradeCode="2A3FA1B7-14D8-4DC8-978B-A0404A81D823" Scope="perUser">
   <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
   <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
+  <Property Id="INSTALLFOLDER"><RegistrySearch Id="PreviousInstallLocation" Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP" Name="InstallLocation" Type="raw" /></Property>
   <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
   <StandardDirectory Id="LocalAppDataFolder"><Directory Id="ProgramsFolder" Name="Programs"><Directory Id="INSTALLFOLDER" Name="Codex Local MCP">$tree</Directory></Directory></StandardDirectory>
   <StandardDirectory Id="ProgramMenuFolder"><Directory Id="ProgramMenuDir" Name="Codex Local MCP"><Component Id="MenuCleanup" Guid="*"><RemoveFolder Id="RemoveMenu" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\OSS Malaysia\CodexLocalMCP" Name="Menu" Value="1" Type="integer" KeyPath="yes" /></Component></Directory></StandardDirectory>
