@@ -190,15 +190,9 @@ export function imagePromptTemplate(
     `Output compression: ${options.output_compression ?? 80} of 100.`,
     `Background: ${background}.`,
     `Target file size: ${options.target_file_kb ?? 256} KB per image.`,
-  );
-  lines.push("Save the image file(s) into ./output/ in the current directory.");
-  lines.push(
+    "Save the image file(s) into ./output/ in the current directory.",
     "Use the actual image generation tool. Never invent image bytes. Request the specified dimensions, quality, format, and background. Avoid unnecessary detail or texture when the user's design permits it. Do not upscale smaller images.",
-  );
-  lines.push(
     "Prefer a returned local file path. If only a data URL is available, retain it in code-mode storage. Use one tools.apply_patch call from JavaScript to write the stored Base64 to a workspace text file, then one PowerShell command to decode it. Do not start a PowerShell process for each Base64 chunk. Do not print Base64 or render generatedImage before saving. If transfer is unavailable, report the limitation.",
-  );
-  lines.push(
     "Use the requested format and compression. Aim for the target file size without changing dimensions. The target is a preference, not a guarantee. Report actual dimensions and bytes. Do not claim unverified options were applied.",
   );
   return lines.join("\n");

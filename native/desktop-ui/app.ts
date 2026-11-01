@@ -201,41 +201,7 @@ function line(text: string, className = "") {
   p.className = className;
   return p;
 }
-function taskCard(task: Json) {
-  const card = document.createElement("article");
-  card.className = "card";
-  const heading = document.createElement("div");
-  heading.className = "card-head";
-  const title = document.createElement("h2");
-  title.textContent =
-    task.action === "codex_generate_image" ? "Generate image" : "Codex task";
-  const status = document.createElement("span");
-  status.className = "badge";
-  status.textContent = task.status ?? "running";
-  heading.append(title, status);
-  const elapsed = Math.floor((task.elapsedMs ?? 0) / 1000),
-    idle = Math.floor((task.idleMs ?? 0) / 1000);
-  const phase =
-    task.status === "completed"
-      ? "Task completed"
-      : task.status === "failed"
-        ? "Task failed"
-        : (phaseNames[task.phase] ?? "Waiting for progress");
-  card.append(
-    heading,
-    line(phase, "task-stage"),
-    line(
-      `Elapsed: ${elapsed} seconds · ${task.steps ?? 0} events completed`,
-      "hint task-time",
-    ),
-  );
-  if (task.status === "running")
-    card.append(
-      line(
-        `Last Codex event: ${idle} seconds ago. ${idle >= 30 ? "No new event yet; the task is still running." : "Progress updates come from Codex events."}`,
-        "hint",
-      ),
-    );
+function taskParameters(task: Json) {
   const opts = task.options ?? {};
   const params = [
     `Model: ${opts.model || "Codex default"}`,
@@ -257,7 +223,44 @@ function taskCard(task: Json) {
     chip.textContent = value;
     chips.append(chip);
   }
-  card.append(chips);
+  return chips;
+}
+function taskPhase(task: Json) {
+  if (task.status === "completed") return "Task completed";
+  if (task.status === "failed") return "Task failed";
+  return phaseNames[task.phase] ?? "Waiting for progress";
+}
+function taskCard(task: Json) {
+  const card = document.createElement("article");
+  card.className = "card";
+  const heading = document.createElement("div");
+  heading.className = "card-head";
+  const title = document.createElement("h2");
+  title.textContent =
+    task.action === "codex_generate_image" ? "Generate image" : "Codex task";
+  const status = document.createElement("span");
+  status.className = "badge";
+  status.textContent = task.status ?? "running";
+  heading.append(title, status);
+  const elapsed = Math.floor((task.elapsedMs ?? 0) / 1000),
+    idle = Math.floor((task.idleMs ?? 0) / 1000);
+  const phase = taskPhase(task);
+  card.append(
+    heading,
+    line(phase, "task-stage"),
+    line(
+      `Elapsed: ${elapsed} seconds · ${task.steps ?? 0} events completed`,
+      "hint task-time",
+    ),
+  );
+  if (task.status === "running")
+    card.append(
+      line(
+        `Last Codex event: ${idle} seconds ago. ${idle >= 30 ? "No new event yet; the task is still running." : "Progress updates come from Codex events."}`,
+        "hint",
+      ),
+    );
+  card.append(taskParameters(task));
   const history = document.createElement("ol");
   history.className = "task-history";
   history.setAttribute("aria-label", "Task stages");
@@ -275,13 +278,17 @@ function taskCard(task: Json) {
       ),
     );
   if (task.outputFiles?.length)
-    for (const file of task.outputFiles)
+    for (const file of task.outputFiles) {
+      const dimensions = file.width
+        ? " · " + file.width + "×" + file.height
+        : "";
       card.append(
         line(
-          `${file.name} · ${(file.bytes / 1024).toFixed(1)} KB${file.width ? ` · ${file.width}×${file.height}` : ""}`,
+          `${file.name} · ${(file.bytes / 1024).toFixed(1)} KB${dimensions}`,
           "hint",
         ),
       );
+    }
   if (task.usage?.output_tokens !== undefined)
     card.append(
       line(
