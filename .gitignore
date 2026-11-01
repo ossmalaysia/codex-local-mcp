@@ -4,6 +4,7 @@ artifacts/
 installer/**/bin/
 installer/**/obj/
 *.log
+target/
 
 # Personal agent instructions (tool routing, local preferences) - never published
 CLAUDE.local.md

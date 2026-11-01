@@ -53,6 +53,12 @@ The update flow follows the same stages as [EzyChat Lite](https://github.com/oss
 
 ### Runtime and Rust options
 
+The first native service implementation is available as an opt-in Windows preview build.
+It handles MCP, OAuth, jobs, artifacts, and activity directly in Rust.
+The existing C# manager and normal EXE installer remain in use.
+See [native build and test instructions](native/README.md) and the [migration design](docs/RUST-MIGRATION.md).
+The preview retains Node.js and the TypeScript files during the staged packaging transition.
+
 The Windows manager uses C# and the installed .NET Framework. The MCP server uses TypeScript and a bundled Node.js runtime.
 The desktop build bundles server dependencies to reduce installation file operations. Native image processing remains a separate dependency.
 The measured app file count fell from 3,821 to 161 before the added HTTP verification bundle.

@@ -28,6 +28,10 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Installed app activity checks failed' }
   & (Join-Path $target 'runtime/node/node.exe') (Join-Path $target 'verify-installed.mjs')
   if ($LASTEXITCODE -ne 0) { throw 'Installed app protocol checks failed' }
+  if (Test-Path -LiteralPath (Join-Path $target 'runtime/codex-mcp-service.exe')) {
+    & (Join-Path $target 'runtime/node/node.exe') (Join-Path $project 'scripts/test-native.mjs') --service (Join-Path $target 'runtime/codex-mcp-service.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Installed Rust browser and execution compatibility checks failed' }
+  }
   [IO.File]::WriteAllText((Join-Path $target 'user-notes.txt'),'test user file; uninstall must preserve it')
 } finally {
   if ($installed) {

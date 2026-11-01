@@ -7,11 +7,27 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from './app/dist/server.js';
 import { createHttpApp } from './app/dist/http.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { fileURLToPath } from 'node:url';
+import os from 'node:os';
+import path from 'node:path';
 const load = createRequire(import.meta.url);
 const sharp = load('./app/node_modules/sharp');
 const pixels = await sharp({ create: { width: 2, height: 2, channels: 4, background: '#4d46d7' } }).png().toBuffer();
 if ((await sharp(pixels).metadata()).width !== 2) throw new Error('Bundled native image processing failed.');
 const manifest = JSON.parse(fs.readFileSync(new URL('./release-manifest.json', import.meta.url), 'utf8').replace(/^\uFEFF/, ''));
+if (manifest.service === 'rust') {
+  const native = new Client({ name: 'native-bundle-verification', version: '1' });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-bundle-'));
+  try {
+    await native.connect(new StdioClientTransport({
+      command: fileURLToPath(new URL('./runtime/codex-mcp-service.exe', import.meta.url)),
+      env: { ...process.env, CODEX_BIN: fileURLToPath(new URL('./runtime/codex/codex.exe', import.meta.url)), CODEX_MCP_ROOT: root, CODEX_MCP_TRANSPORT: 'stdio', CODEX_SANDBOX_MODE: 'workspace-write' },
+    }));
+    if (native.getServerVersion()?.version !== manifest.version || (await native.listTools()).tools.length !== 4) throw new Error('Installed Rust service contract or version failed.');
+    console.log(`Installed Rust service and version verified: ${manifest.version}. No AI model was called.`);
+  } finally { await native.close(); fs.rmdirSync(root); }
+}
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 const server = createServer();
 const client = new Client({ name: 'desktop-bundle-verification', version: '1' });

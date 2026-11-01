@@ -1,0 +1,161 @@
+{
+  "tools": [
+    {
+      "name": "codex_run",
+      "title": "Run a task with the local Codex CLI",
+      "description": "Hand a natural-language task to the local Codex CLI coding agent. Codex can write and run code, install packages and call APIs inside an isolated workspace folder, then this returns its output plus any files it created. If Codex takes longer than wait_sec, this returns status: running and a job_id instead; call codex_job_result with it to collect the result.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The task for Codex, written as you would to a developer."
+          },
+          "workspace": {
+            "description": "Relative workspace folder name under the workspace root. Reuse the same name to continue working on the same files. Defaults to a new timestamped folder.",
+            "type": "string"
+          },
+          "timeout_sec": {
+            "description": "Seconds before Codex is killed. Default 300.",
+            "type": "number"
+          },
+          "model": {
+            "description": "Override the Codex model for this run.",
+            "type": "string"
+          },
+          "wait_sec": {
+            "description": "Seconds to wait for the result before returning a job_id instead. Default 45, maximum 50, which keeps the call under common 60-second client timeouts.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "codex_generate_image",
+      "title": "Generate images via the local Codex CLI",
+      "description": "Generate images with the local Codex CLI. The prompt is passed through as written. Returns the saved file paths and shows the images inline, downscaling a preview when a file is too large to inline. Defaults to a fast low-quality 1024x1024 draft; raise quality for final assets. Image generation often takes longer than wait_sec, in which case this returns status: running and a job_id; call codex_job_result with it to collect the images.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What the image should depict."
+          },
+          "count": {
+            "description": "How many images. Default 1.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "size": {
+            "description": "Pixel size as WIDTHxHEIGHT, e.g. \"1024x1024\" (fastest, the default), \"1536x1024\" landscape, \"1024x1536\" portrait, or \"auto\". This is a request to Codex; the actual dimensions are reported in the result.",
+            "type": "string"
+          },
+          "quality": {
+            "description": "Generation quality. Default \"low\" - fastest, good for drafts. Use \"high\" for final assets.",
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "auto"
+            ]
+          },
+          "workspace": {
+            "description": "Workspace folder name. Defaults to a new folder.",
+            "type": "string"
+          },
+          "timeout_sec": {
+            "description": "Seconds before Codex is killed.",
+            "type": "number"
+          },
+          "open": {
+            "description": "Open the generated images in the user's default image viewer. Default true, because MCP clients do not render tool-result images into the chat.",
+            "type": "boolean"
+          },
+          "wait_sec": {
+            "description": "Seconds to wait for the result before returning a job_id instead. Default 45, maximum 50, which keeps the call under common 60-second client timeouts.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "codex_job_result",
+      "title": "Collect the result of a running Codex job",
+      "description": "Get the result of a codex_run or codex_generate_image call that returned status: running. Waits up to wait_sec for the job to finish; if it is still running, call again. Results stay available for 60 minutes after the job finishes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The job_id returned by codex_run or codex_generate_image."
+          },
+          "wait_sec": {
+            "description": "Seconds to wait for the result before returning a job_id instead. Default 45, maximum 50, which keeps the call under common 60-second client timeouts.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "codex_read_artifact",
+      "title": "Read a file produced by Codex",
+      "description": "Read one file from a Codex workspace, for artifacts that were too large to inline. Images come back as image content, everything else as text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Path to the file, relative to the workspace root or absolute inside it."
+          },
+          "max_bytes": {
+            "description": "Refuse files larger than this. Default 5000000.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    }
+  ],
+  "resources": [],
+  "resourceTemplates": [
+    {
+      "name": "workspace-file",
+      "title": "Codex workspace file",
+      "uriTemplate": "file:///{+path}",
+      "description": "A file produced by Codex inside the workspace root. Reads outside the root are refused."
+    }
+  ]
+}

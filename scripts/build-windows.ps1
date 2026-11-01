@@ -3,6 +3,7 @@ param(
   [switch]$Release,
   [switch]$PortableOnly,
   [switch]$LegacyMsi,
+  [switch]$NativeService,
   [ValidateSet('high','mszip')][string]$CompressionLevel = 'high'
 )
 $ErrorActionPreference = 'Stop'
@@ -68,6 +69,12 @@ $package.version = $Version
 $package | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $app 'package.json') -Encoding utf8
 & $node scripts/bundle-windows.mjs $payload
 if ($LASTEXITCODE -ne 0) { throw 'Desktop server bundling failed' }
+if ($NativeService) {
+  & (Join-Path $PSScriptRoot 'build-native.ps1') -Version $Version -Output "artifacts/windows-$Version/payload/runtime"
+  if ($LASTEXITCODE -ne 0) { throw 'Native service packaging failed' }
+} elseif (Test-Path -LiteralPath (Join-Path $runtime 'codex-mcp-service.exe')) {
+  throw 'A previous native build remains in this payload. Use a separate version directory for the TypeScript package.'
+}
 Copy-Item -LiteralPath 'LICENSE','README.md','SECURITY.md' -Destination $payload -Force
 $managerOutput = Join-Path $payload 'manager-build'
 & dotnet build installer/windows/Manager/Manager.csproj -c Release "-p:Version=$Version" "-p:FileVersion=$Version.0" "-p:AssemblyVersion=$Version.0" -o $managerOutput --nologo
@@ -75,6 +82,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows manager build failed' }
 Get-ChildItem -LiteralPath $managerOutput -File | ForEach-Object { Move-Item -LiteralPath $_.FullName -Destination (Join-Path $payload $_.Name) -Force }
 Remove-Item -LiteralPath $managerOutput
 $manifest = @{ product='codex-local-mcp'; version=$Version; commit=$sha; release=[bool]$Release; architecture='x64'; node=$dependencies.node; cloudflared=$dependencies.cloudflared; codex=$dependencies.codex; codexIntegrity=$packed.integrity; sandbox='isolated'; defaultWindowsSandbox='mxc'; defaultCommandNetworking=$false }
+$manifest.service = if ($NativeService) { 'rust' } else { 'typescript' }
 $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $payload 'release-manifest.json') -Encoding utf8
 $zip = Join-Path $artifactsRoot "CodexLocalMCP-$Version-windows-x64.zip"
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip }
