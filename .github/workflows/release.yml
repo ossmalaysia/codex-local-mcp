@@ -103,6 +103,13 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: powershell.exe -NoProfile -STA -File installer/windows/test-updater.ps1 -Executable "artifacts/windows-$env:RELEASE_VERSION/payload/CodexMCP.exe" -Installer "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.zip" -Version $env:RELEASE_VERSION
+      - name: Install the Chromium test browser
+        run: npx playwright install chromium
+      - name: Test browser login against the packaged server
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: node scripts/test-browser-login.mjs --bundle-root "artifacts/windows-$env:RELEASE_VERSION/payload"
       - name: Attach installer and SHA256 to the release
         shell: pwsh
         env:
