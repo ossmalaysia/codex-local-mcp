@@ -22,6 +22,10 @@ namespace CodexLocalMCP {
         if (test!=null && !System.Text.RegularExpressions.Regex.IsMatch(test,"^[a-f0-9]{32}$")) throw new ArgumentException("Invalid setup test identifier.");
         string target=Option(args,"--target") ?? SetupEngine.DefaultDirectory;
         string record=Option(args,"--record") ?? Path.Combine(SetupEngine.DataDirectory,"install.json");
+        // The app passes --connection when it starts an update. Version 0.7 passed only --target
+        // and stopped a connection that was usually running, so treat that update as connected.
+        string connection=Option(args,"--connection");
+        bool resume=connection!=null ? connection=="running" : Option(args,"--target")!=null;
         if (args.Contains("--self-test")) { SetupEngine.CheckResources(); return 0; }
         using (var mutex=new Mutex(false,@"Local\CodexLocalMCPSetup-"+WindowsIdentity.GetCurrent().User.Value)) {
           bool acquired=false; try { acquired=mutex.WaitOne(0); } catch (AbandonedMutexException) { acquired=true; }
@@ -32,7 +36,7 @@ namespace CodexLocalMCP {
               else SetupEngine.Install(target,test,!args.Contains("--no-shortcuts"),null,CancellationToken.None);
               return 0;
             }
-            using (var form=new SetupWindow(uninstall,target,record,test)) {
+            using (var form=new SetupWindow(uninstall,target,record,test,resume)) {
               if (args.Length==2 && args[0]=="--render-preview") {
                 form.ShowInTaskbar=false; form.StartPosition=FormStartPosition.Manual; form.Location=new Point(-32000,-32000); form.Show(); Application.DoEvents();
                 using (var bitmap=new Bitmap(form.Width,form.Height)) { form.DrawToBitmap(bitmap,new Rectangle(Point.Empty,form.Size)); bitmap.Save(args[1]); }
@@ -50,15 +54,16 @@ namespace CodexLocalMCP {
     }
   }
   sealed class SetupWindow : Form {
-    readonly bool uninstall; readonly string record,test;
+    readonly bool uninstall,resume; readonly string record,test;
     readonly TextBox location=new TextBox(); readonly Label status=new Label(); readonly ProgressBar progress=new ProgressBar();
     readonly Button action=new Button(),cancel=new Button(),browse=new Button();
     readonly CheckBox launch=new CheckBox { Text="Open Codex Local MCP when setup finishes",Checked=true,AutoSize=true };
     readonly CancellationTokenSource cancellation=new CancellationTokenSource();
     bool working;
     internal bool Completed { get; private set; }
-    internal SetupWindow(bool remove,string directory,string recordPath,string testId) {
-      uninstall=remove; record=recordPath; test=testId;
+    internal SetupWindow(bool remove,string directory,string recordPath,string testId,bool reconnect=false) {
+      uninstall=remove; record=recordPath; test=testId; resume=reconnect;
+      if(reconnect) launch.Text="Open Codex Local MCP and reconnect when setup finishes";
       var version=FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).ProductVersion.Split('+')[0];
       Text="Codex Local MCP "+(remove?"Uninstall":"Setup"); ClientSize=new Size(660,460); FormBorderStyle=FormBorderStyle.FixedDialog; MaximizeBox=false;
       StartPosition=FormStartPosition.CenterScreen; Font=new Font("Segoe UI",10); BackColor=Color.White; ForeColor=Color.FromArgb(27,35,49);
@@ -85,7 +90,7 @@ namespace CodexLocalMCP {
       FormClosing+=(s,e)=>{ if(working){ e.Cancel=true; if(uninstall) status.Text="Please wait for uninstall to finish."; else { cancellation.Cancel(); status.Text="Cancelling setup…"; } } };
     }
     async Task Run() {
-      if(Completed) { if(!uninstall && launch.Checked) try { Process.Start(UpdateInstaller.CleanProcess(Path.Combine(location.Text,"CodexMCP.exe"),"")); } catch(Exception error) { MessageBox.Show(this,"Setup is complete. Open Codex Local MCP from the Start menu. "+error.Message,Text); } Close(); return; }
+      if(Completed) { if(!uninstall && launch.Checked) try { Process.Start(UpdateInstaller.CleanProcess(Path.Combine(location.Text,"CodexMCP.exe"),resume?"--resume-connection":"")); } catch(Exception error) { MessageBox.Show(this,"Setup is complete. Open Codex Local MCP from the Start menu. "+error.Message,Text); } Close(); return; }
       working=true; action.Enabled=false; browse.Enabled=false; launch.Enabled=false; cancel.Enabled=!uninstall;
       string directory=location.Text;
       var updates=new Progress<Tuple<int,string>>(value=>{ if(!IsDisposed) { progress.Value=value.Item1; status.Text=value.Item2; if(value.Item1>=92) cancel.Enabled=false; } });

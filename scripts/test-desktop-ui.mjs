@@ -56,8 +56,18 @@ try {
       core: {
         invoke: async (name, args) => {
           switch (name) {
-            case "state":
-              return { settings, connection, update, version: "0.7.0" };
+            case "state": {
+              // The service reports a post-update reconnect once.
+              const resumed = window.__resumed ?? null;
+              window.__resumed = null;
+              return {
+                settings,
+                connection,
+                update,
+                version: "0.7.0",
+                resumed,
+              };
+            }
             case "account_status":
               return {
                 signedIn: true,
@@ -227,6 +237,15 @@ try {
   await page.locator("#show-prompts").check();
   await page.getByText("Prompts will show in Activity").waitFor();
   assert.equal(await page.evaluate(() => window.__saved.showPrompts), true);
+  // After an update restarts the connection, the window says so once.
+  await page.getByRole("button", { name: "1 Workspace" }).click();
+  await page.evaluate(() => (window.__resumed = { ok: true }));
+  await page.getByText("The connection started again.").waitFor();
+  assert.equal(await page.locator("#activity").isVisible(), true);
+  await page.evaluate(
+    () => (window.__resumed = { ok: false, error: "Tunnel unavailable" }),
+  );
+  await page.getByText(/did not start again: Tunnel unavailable/).waitFor();
   await page.setViewportSize({ width: 800, height: 620 });
   assert.equal(
     await page.evaluate(
@@ -245,7 +264,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Desktop UI passed: saved accounts, step status, saved hostname, connection, live activity, update notice, errors, field validation, locked settings, prompt display, minimum window size.",
+    "Desktop UI passed: saved accounts, step status, saved hostname, connection, live activity, update notice, errors, field validation, locked settings, prompt display, update reconnect, minimum window size.",
   );
 } finally {
   await browser.close();
