@@ -29,19 +29,59 @@ existing `codex login` is enough.
 
 ## Windows installer
 
-Download the versioned Windows x64 MSI and its SHA256 file from [Releases](https://github.com/ossmalaysia/codex-local-mcp/releases).
+Download **CodexLocalMCP-VERSION-windows-x64-setup.exe** from [Releases](https://github.com/ossmalaysia/codex-local-mcp/releases).
+Open it, select **Install**, then select **Finish**. Setup extracts the files and creates a Start menu shortcut.
+It installs for your Windows account and adds an entry under **Settings → Apps → Installed apps**.
+The setup executable uses its own verified extraction process, which avoids the stalled MSI validation stage.
+Existing login settings and workspaces remain separate from the application files.
+Close any running copy from its tray menu before installation.
+
+The app stays in the system tray when its window closes. Select **Exit** from the tray menu to stop it.
+It checks the latest stable GitHub release after startup and every 12 hours. A tray notice appears when an update is available.
+Select the notice or **Check for updates** to review and download the update. Installation requires a second confirmation.
+Updates stage the new application, keep the previous directory, replace the application folder, and restart the app.
+The application validates GitHub's SHA256 digest, exact repository and asset name, download size, redirect hosts, and package metadata.
+ZIP updates also reject unsafe paths, links, duplicate names, and excessive extracted sizes.
+MCP credentials are not passed to the updater or installer. Downloads stay in the private application data folder.
+GitHub HTTPS and the repository account are the update trust source. Releases currently have no independent publisher signature.
+
+The new setup uses a separate application folder when an old MSI installation exists.
+The old MSI registration stays intact. This avoids overwriting files managed by Windows Installer.
+Internal update ZIP files are downloaded and extracted by the app. Users do not need to copy or extract them.
+
+The update flow follows the same stages as [EzyChat Lite](https://github.com/ossmalaysia/ezychat-lite/tree/main/apps/desktop/src/updater): check, notify, download, verify, confirm, replace, restart.
+
+### Runtime and Rust options
+
+The Windows manager uses C# and the installed .NET Framework. The MCP server uses TypeScript and a bundled Node.js runtime.
+The desktop build bundles server dependencies to reduce installation file operations. Native image processing remains a separate dependency.
+The measured app file count fell from 3,821 to 161 before the added HTTP verification bundle.
+The manager executable used about 64 KB before the updater. The pinned Node runtime uses about 90 MB; the pinned Codex executables use about 430 MB.
+Changing the manager language cannot remove those separate runtime files or fix Windows Installer validation.
+
+A native Rust MCP server could use the [official Rust SDK](https://github.com/modelcontextprotocol/rust-sdk) and remove the separate Node.js runtime.
+That migration must preserve OAuth login, PKCE, refresh-token reuse protection, MCP Apps, image handling, job control, and Windows sandbox checks.
+The current change keeps the tested TypeScript server. The setup and update process avoids Windows Installer.
+
+Download the versioned Windows x64 setup executable and its SHA256 file from [Releases](https://github.com/ossmalaysia/codex-local-mcp/releases).
 The installer includes Node.js, Codex CLI, Cloudflare Tunnel, and a Windows configuration app.
 It installs for the current Windows user and registers a Start menu shortcut.
 
 Open **Codex Local MCP** from the Start menu. Then:
 
-1. Select a dedicated workspace folder.
-2. Enter your MCP username and password.
-3. Select the Windows sandbox backend.
-4. Select Quick Tunnel or Named Tunnel.
-5. Save the settings.
-6. Select **Sign in to Codex**.
-7. Select **Start tunnel**.
+1. In **Workspace**, select **Choose folder** and choose a dedicated local workspace. Select **Continue**.
+2. In **Accounts**, enter your MCP username. Enter or generate a password, then copy it to your password manager.
+3. Select **Sign in to Codex** and complete the OpenAI login. Select **Continue**.
+4. In **Connection**, keep **Quick Tunnel** for the first setup. No Cloudflare account is required.
+5. Select **Start connection**. The app saves settings and checks sandbox isolation before startup.
+6. In **Use in Claude**, select **Copy URL**. Add that URL as a custom connector in Claude.
+7. Connect the connector and enter the MCP username and password you configured.
+
+The app shows connection status in the sidebar. **View activity** opens diagnostic output.
+**Advanced settings** contains the Windows sandbox backend, command networking, and local listener port.
+Named tunnel fields appear only when **Named Tunnel** is selected.
+A Quick Tunnel URL changes after restart. Update the connector in Claude with the new URL.
+Keep the app open and the PC awake while the remote connection is in use.
 
 The default backend is MXC. It requires a compatible, updated Windows device.
 The elevated legacy backend requires its own sandbox setup and can need administrator approval.
@@ -54,17 +94,23 @@ Before remote startup, a real sandbox check verifies workspace writes and denied
 When networking is disabled, it also verifies that a local test connection is denied.
 If any check fails, remote startup stops. The check does not call an AI model.
 
-For a named tunnel, enter its HTTPS origin and token.
-Configure the hostname in Cloudflare to route to `http://127.0.0.1:<your listener port>`.
+For a permanent address, select **Named Tunnel**, then **Sign in to Cloudflare**.
+Approve your domain in the browser. Select **Load domains** to use a saved sign-in.
+Choose a domain and address name, then select **Create address**.
+The app creates the tunnel, DNS record, and local route. It rejects conflicting DNS records.
+Select **Start connection** after the address is ready.
+For an existing tunnel, select **Use an existing tunnel** and enter its HTTPS origin and token.
+For that manual option, configure the hostname route to `http://127.0.0.1:<your listener port>` in Cloudflare.
+Cloudflare account credentials use Windows DPAPI encryption. They stay in the manager and do not reach Codex or the MCP server.
 Passwords and tunnel tokens use Windows DPAPI encryption for the current user.
 Settings and Codex login files are stored under `%LOCALAPPDATA%\CodexLocalMCPData`.
 The workspace must be separate from that folder and the installation folder.
 Updates and uninstall preserve settings and workspaces.
 
-The MSI version, configuration app version, MCP server version, and release manifest use the release tag.
+The setup version, configuration app version, MCP server version, and release manifest use the release tag.
 The manifest records the source commit and bundled tool versions.
 Release builds require a clean checkout of the exact tag.
-The generated MSI is unsigned unless a release operator applies an Authenticode signature.
+The generated setup executable is unsigned unless a release operator applies an Authenticode signature.
 
 See [official Windows sandbox documentation](https://learn.chatgpt.com/docs/windows/windows-sandbox)
 and [Codex permission profiles](https://learn.chatgpt.com/docs/permissions).

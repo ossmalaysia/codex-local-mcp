@@ -77,7 +77,8 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
     const id = random();
     const browser = random();
     this.pending.set(id, { clientId: client.client_id, params, browser }, 300);
-    res.cookie("codex_oauth", browser, {
+    // Separate cookies prevent another connector tab from replacing this request's browser binding.
+    res.cookie(`codex_oauth_${id}`, browser, {
       httpOnly: true, secure: this.resource.protocol === "https:", sameSite: "lax", path: "/login", maxAge: 300_000,
     });
     res.type("html").send(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Connect Codex MCP</title>
@@ -92,7 +93,8 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
   async login(req: Request, res: Response): Promise<void> {
     const id = typeof req.body?.request_id === "string" ? req.body.request_id : "";
     const pending = this.pending.get(id);
-    const cookie = req.headers.cookie?.split(";").map(v => v.trim()).find(v => v.startsWith("codex_oauth="))?.slice(12);
+    const cookieName = `codex_oauth_${id}=`;
+    const cookie = req.headers.cookie?.split(";").map(v => v.trim()).find(v => v.startsWith(cookieName))?.slice(cookieName.length);
     if (!pending || cookie !== pending.browser || (req.headers.origin && req.headers.origin !== this.resource.origin)) {
       res.status(400).send("Login request is invalid or expired. Start the connection again.");
       return;
@@ -113,7 +115,7 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
     const callback = new URL(pending.params.redirectUri);
     callback.searchParams.set("code", code);
     if (pending.params.state !== undefined) callback.searchParams.set("state", pending.params.state);
-    res.clearCookie("codex_oauth", { path: "/login" });
+    res.clearCookie(`codex_oauth_${id}`, { path: "/login", secure: this.resource.protocol === "https:", sameSite: "lax", httpOnly: true });
     res.redirect(303, callback.href);
   }
 

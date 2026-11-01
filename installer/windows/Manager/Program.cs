@@ -32,6 +32,14 @@ namespace CodexLocalMCP {
     public static string Unprotect(string text) => string.IsNullOrEmpty(text) ? "" : Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(text), null, DataProtectionScope.CurrentUser));
     public static Settings Load() => File.Exists(FileName) ? new JavaScriptSerializer().Deserialize<Settings>(File.ReadAllText(FileName)) : new Settings();
     public static void Save(Settings settings) {
+      EnsurePrivateRoot();
+      var temporary = FileName + ".new";
+      File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(settings), new UTF8Encoding(false));
+      if (File.Exists(FileName)) File.Replace(temporary, FileName, null); else File.Move(temporary, FileName);
+      Directory.CreateDirectory(Path.Combine(Root, "codex-home"));
+    }
+    public static void EnsurePrivateRoot() {
+      if (Directory.Exists(Root) && (File.GetAttributes(Root) & FileAttributes.ReparsePoint) != 0) throw new IOException("The private data folder must not be a link.");
       Directory.CreateDirectory(Root);
       var identity = WindowsIdentity.GetCurrent().User;
       var acl = new DirectorySecurity();
@@ -40,17 +48,17 @@ namespace CodexLocalMCP {
       acl.AddAccessRule(new FileSystemAccessRule(identity, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
       acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
       new DirectoryInfo(Root).SetAccessControl(acl);
-      var temporary = FileName + ".new";
-      File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(settings), new UTF8Encoding(false));
-      if (File.Exists(FileName)) File.Replace(temporary, FileName, null); else File.Move(temporary, FileName);
-      Directory.CreateDirectory(Path.Combine(Root, "codex-home"));
     }
     static bool Within(string path, string root) => path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(root.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
-    public static void Validate(Settings value, string installRoot) {
-      if (!Path.IsPathRooted(value.Workspace) || value.Workspace.StartsWith(@"\\")) throw new Exception("Choose an absolute local workspace path.");
-      var workspace = Path.GetFullPath(value.Workspace).TrimEnd('\\');
+    public static string ValidateWorkspace(string value, string installRoot) {
+      if (!Path.IsPathRooted(value) || value.StartsWith(@"\\")) throw new Exception("Choose an absolute local workspace path.");
+      var workspace = Path.GetFullPath(value).TrimEnd('\\');
       if (workspace == Path.GetPathRoot(workspace).TrimEnd('\\') || Within(Root, workspace) || Within(workspace, Root) || Within(installRoot, workspace) || Within(workspace, installRoot))
         throw new Exception("The workspace must be separate from installation files, credentials, and drive roots.");
+      return workspace;
+    }
+    public static void Validate(Settings value, string installRoot) {
+      var workspace = ValidateWorkspace(value.Workspace, installRoot);
       if (string.IsNullOrWhiteSpace(value.Username)) throw new Exception("Enter an administrator username.");
       var password = Unprotect(value.Password);
       if (password.Length < 24 || Encoding.UTF8.GetByteCount(password) > 1024) throw new Exception("Use a password with at least 24 characters and at most 1024 UTF-8 bytes.");
@@ -69,6 +77,7 @@ namespace CodexLocalMCP {
 
   static class Program {
     [STAThread] static int Main(string[] args) {
+      if (args.Length > 0 && args[0] == "--install-update") return UpdateInstaller.Run(args);
       if (args.Contains("--self-test")) {
         try {
           const string secret = "self-test-only-secret";
@@ -79,8 +88,9 @@ namespace CodexLocalMCP {
         } catch { return 3; }
       }
       Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-      if (args.Length == 2 && args[0] == "--render-preview") {
+      if ((args.Length == 2 || args.Length == 3) && args[0] == "--render-preview") {
         using (var window = new Manager()) {
+          if (args.Length == 3) window.PreviewStep(int.Parse(args[2]));
           window.ShowInTaskbar = false; window.StartPosition = FormStartPosition.Manual; window.Location = new Point(-32000, -32000);
           window.Show(); Application.DoEvents(); window.PerformLayout();
           using (var bitmap = new Bitmap(window.Width, window.Height)) {
@@ -90,13 +100,17 @@ namespace CodexLocalMCP {
         }
         return 0;
       }
-      try { Application.Run(new Manager()); return 0; }
-      catch (Exception error) { MessageBox.Show(error.Message, "Codex Local MCP", MessageBoxButtons.OK, MessageBoxIcon.Error); return 1; }
+      bool first;
+      using (var instance = new System.Threading.Mutex(true, @"Local\CodexLocalMCP-" + WindowsIdentity.GetCurrent().User.Value, out first)) {
+        if (!first) { MessageBox.Show("Codex Local MCP is already running. Open it from the system tray.", "Codex Local MCP"); return 0; }
+        try { Application.Run(new Manager(true)); return 0; }
+        catch (Exception error) { MessageBox.Show(error.Message, "Codex Local MCP", MessageBoxButtons.OK, MessageBoxIcon.Error); return 1; }
+      }
     }
   }
 
-  sealed class Manager : Form {
-    readonly string installRoot = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+  sealed partial class Manager : Form {
+    readonly string installRoot = Path.GetDirectoryName(typeof(Manager).Assembly.Location);
     Settings saved = Store.Load();
     readonly TextBox workspace = new TextBox(), username = new TextBox(), password = new TextBox { UseSystemPasswordChar = true }, token = new TextBox { UseSystemPasswordChar = true }, publicUrl = new TextBox();
     readonly ComboBox backend = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList }, tunnel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
@@ -107,58 +121,26 @@ namespace CodexLocalMCP {
     Process server;
     bool busy;
 
-    public Manager() {
-      var version = FileVersionInfo.GetVersionInfo(Application.ExecutablePath).ProductVersion.Split('+')[0];
-      Text = "Codex Local MCP " + version; Size = new Size(900, 780); MinimumSize = new Size(760, 700); StartPosition = FormStartPosition.CenterScreen;
-      Font = new Font("Segoe UI", 9F); AutoScaleMode = AutoScaleMode.Dpi;
-      var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 15 };
-      layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-      Controls.Add(layout);
-      Add(layout, "Version", new Label { Text = version + " / Windows x64 / isolated execution", AutoSize = true });
-      Add(layout, "Workspace folder", workspace);
-      Add(layout, "MCP username", username);
-      Add(layout, "MCP password", password);
-      Add(layout, "Windows sandbox", backend); backend.Items.AddRange(new object[] { "MXC (recommended)", "Elevated (legacy, setup may require administrator access)" });
-      Add(layout, "Command networking", network);
-      Add(layout, "Cloudflare Tunnel", tunnel); tunnel.Items.AddRange(new object[] { "Quick Tunnel (temporary URL)", "Named Tunnel (stable hostname and token)" });
-      Add(layout, "Named HTTPS origin", publicUrl);
-      Add(layout, "Named tunnel token", token);
-      Add(layout, "Local listener port", port);
-      var note = new Label { AutoSize = true, MaximumSize = new Size(630, 0), Text = "Codex commands can write in the selected workspace. Other files are denied except required runtime files. Start checks this policy first. MXC requires a compatible Windows device. Passwords and tokens use Windows DPAPI. Leave password fields blank to keep saved values." };
-      Add(layout, "Isolation and login", note);
-      var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
-      var save = new Button { Text = "Save settings", AutoSize = true };
-      var login = new Button { Text = "Sign in to Codex", AutoSize = true };
-      var check = new Button { Text = "Check sandbox", AutoSize = true };
-      actions.Controls.AddRange(new Control[] { save, login, check, start, stop });
-      Add(layout, "Actions", actions);
-      Add(layout, "Status", log);
+    public Manager() : this(false) { }
+    public Manager(bool backgroundServices) {
+      var version = FileVersionInfo.GetVersionInfo(typeof(Manager).Assembly.Location).ProductVersion.Split('+')[0];
+      BuildInterface(version);
       workspace.Text = saved.Workspace; username.Text = saved.Username; network.Checked = saved.Network;
       backend.SelectedIndex = saved.Backend == "elevated" ? 1 : 0; tunnel.SelectedIndex = saved.Tunnel == "named" ? 1 : 0;
       publicUrl.Text = saved.PublicUrl; port.Value = Math.Max(1024, Math.Min(65535, saved.Port));
-      tunnel.SelectedIndexChanged += (s, e) => { publicUrl.Enabled = token.Enabled = tunnel.SelectedIndex == 1; };
-      publicUrl.Enabled = token.Enabled = tunnel.SelectedIndex == 1;
-      save.Click += (s, e) => Guard(() => { Save(); Write("Settings saved for this Windows user."); });
-      login.Click += (s, e) => Guard(() => {
-        Save(); var info = Info(Path.Combine(installRoot, "runtime", "codex", "codex.exe"), "login", false);
-        info.EnvironmentVariables.Remove("CODEX_MCP_PASSWORD"); info.EnvironmentVariables.Remove("CODEX_MCP_TUNNEL_TOKEN");
-        info.CreateNoWindow = false; Process.Start(info); Write("Complete Codex login in the opened terminal or browser.");
-      });
+      tunnel.SelectedIndexChanged += (s, e) => UpdateTunnelFields();
+      UpdateTunnelFields();
+      login.Click += async (s, e) => await Operation(SignIn);
       check.Click += async (s, e) => await Operation(async () => { Save(); await CheckSandbox(); });
       start.Click += async (s, e) => await Operation(StartServer);
       stop.Click += async (s, e) => await StopServer();
       FormClosing += async (s, e) => {
+        if (tray != null && !exitRequested && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; HideToTray(); return; }
         if (busy) { e.Cancel = true; Write("Wait for the current check to finish before closing."); return; }
         if (server != null && !server.HasExited) { e.Cancel = true; await StopServer(); Close(); }
       };
-      Write("1. Save your settings. 2. Sign in to Codex. 3. Start the tunnel. Copy the printed MCP URL into Claude.");
-      Write("A named tunnel must route its hostname to http://127.0.0.1:" + saved.Port + " in Cloudflare.");
-    }
-    static void Add(TableLayoutPanel panel, string text, Control control) {
-      int row = panel.Controls.Count / 2;
-      panel.Controls.Add(new Label { Text = text, AutoSize = true, Padding = new Padding(0, 5, 0, 5) }, 0, row);
-      control.Dock = DockStyle.Fill; control.Margin = new Padding(3, 4, 3, 4); panel.Controls.Add(control, 1, row);
-      panel.RowStyles.Add(new RowStyle(row == 12 ? SizeType.Percent : SizeType.AutoSize, row == 12 ? 100 : 0));
+      Write("Ready. Follow the four setup steps on the left.");
+      if (backgroundServices) InitializeTray(version);
     }
     void Save() {
       if (server != null && !server.HasExited) throw new Exception("Stop the server before changing settings.");
@@ -167,12 +149,14 @@ namespace CodexLocalMCP {
         Password = password.Text.Length > 0 ? Store.Protect(password.Text) : saved.Password,
         TunnelToken = token.Text.Length > 0 ? Store.Protect(token.Text) : saved.TunnelToken };
       Store.Validate(next, installRoot); Store.Save(next); saved = next; password.Clear(); token.Clear();
+      accountState.Text = "MCP password saved for this Windows user.";
     }
     void Guard(Action action) { try { if (busy) throw new Exception("Wait for the current check to finish."); if (server != null && !server.HasExited) throw new Exception("Stop the server before changing settings."); action(); } catch (Exception error) { MessageBox.Show(this, error.Message, "Codex Local MCP", MessageBoxButtons.OK, MessageBoxIcon.Error); } }
     async Task Operation(Func<Task> action) {
       if (busy) return; busy = true; start.Enabled = false;
-      try { await action(); } catch (Exception error) { Write(error.Message); MessageBox.Show(this, error.Message, "Codex Local MCP", MessageBoxButtons.OK, MessageBoxIcon.Error); }
-      finally { busy = false; start.Enabled = server == null || server.HasExited; }
+      login.Enabled = check.Enabled = next.Enabled = false;
+      try { await action(); } catch (Exception error) { if (server == null || server.HasExited) ConnectionStatus("Action needs attention"); Write(error.Message); MessageBox.Show(this, error.Message, "Codex Local MCP", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+      finally { busy = false; start.Enabled = server == null || server.HasExited; login.Enabled = check.Enabled = next.Enabled = true; }
     }
     ProcessStartInfo Info(string executable, string arguments, bool capture) {
       var info = new ProcessStartInfo(executable, arguments) { WorkingDirectory = installRoot, UseShellExecute = false, CreateNoWindow = true,
@@ -220,12 +204,16 @@ namespace CodexLocalMCP {
     }
     async Task StartServer() {
       if (server != null && !server.HasExited) return;
-      Save(); await CheckSandbox();
+      ConnectionStatus("Checking sandbox…");
+      Save();
+      using (var cloudflare = new CloudflareSetup()) await cloudflare.Reconcile(saved);
+      await CheckSandbox();
+      ConnectionStatus("Opening Cloudflare connection…");
       var info = Info(Node, Script("index.js") + " --tunnel --managed", true);
       server = new Process { StartInfo = info, EnableRaisingEvents = true };
       server.OutputDataReceived += (s, e) => { if (e.Data != null) Write(e.Data); };
       server.ErrorDataReceived += (s, e) => { if (e.Data != null) Write(e.Data); };
-      server.Exited += (s, e) => { if (!IsDisposed) BeginInvoke(new Action(() => { start.Enabled = true; stop.Enabled = false; Write("Server stopped."); })); };
+      server.Exited += (s, e) => { if (!IsDisposed) BeginInvoke(new Action(() => { start.Enabled = true; stop.Enabled = false; ConnectionStatus("Not connected"); Write("Server stopped."); })); };
       server.Start(); server.BeginOutputReadLine(); server.BeginErrorReadLine(); stop.Enabled = true;
     }
     async Task StopServer() {
@@ -236,6 +224,7 @@ namespace CodexLocalMCP {
         if (!await Task.Run(() => process.WaitForExit(5000))) KillTree(process);
       }
       process.Dispose(); server = null; start.Enabled = true; stop.Enabled = false;
+      ConnectionStatus("Not connected");
     }
     static void KillTree(Process process) {
       using (var killer = Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "taskkill.exe"), "/PID " + process.Id + " /T /F") { UseShellExecute = false, CreateNoWindow = true })) killer.WaitForExit(10000);
@@ -246,6 +235,7 @@ namespace CodexLocalMCP {
       foreach (var secret in new[] { saved.Password, saved.TunnelToken }) if (!string.IsNullOrEmpty(secret)) {
         var plaintext = Store.Unprotect(secret); if (plaintext.Length > 0) text = text.Replace(plaintext, "[redacted]");
       }
+      DetectEndpoint(text);
       log.AppendText(text.TrimEnd() + Environment.NewLine); if (log.TextLength > 50000) log.Text = log.Text.Substring(log.TextLength - 40000);
       log.SelectionStart = log.TextLength; log.ScrollToCaret();
     }

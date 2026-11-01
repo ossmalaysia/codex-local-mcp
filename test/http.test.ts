@@ -69,6 +69,33 @@ const exchange = (clientId: string, code: string, verifier: string, extra = {}) 
 }));
 
 describe("remote MCP OAuth", () => {
+  it("keeps two browser authorization pages valid in the same cookie jar", async () => {
+    const { createServer } = await import("node:http");
+    const server = createServer();
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    server.on("request", createHttpApp({ publicUrl: new URL(origin), host: "127.0.0.1", port: 3000, username: "admin", password }, checkLogin));
+    try {
+      const client = await (await fetch(`${origin}/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ redirect_uris: ["http://127.0.0.1:54321/callback"], token_endpoint_auth_method: "none", grant_types: ["authorization_code"], response_types: ["code"] }) })).json();
+      const jar = new Map<string, string>();
+      const pages: { id: string; verifier: string }[] = [];
+      for (let i = 0; i < 2; i++) {
+        const verifier = randomBytes(32).toString("base64url");
+        const query = new URLSearchParams({ client_id: client.client_id, redirect_uri: "http://127.0.0.1:54321/callback", response_type: "code", code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", scope: "codex:access", resource: `${origin}/mcp` });
+        const response = await fetch(`${origin}/authorize?${query}`, { headers: { Cookie: [...jar.values()].join("; ") } });
+        const cookie = response.headers.get("set-cookie")!.split(";")[0];
+        jar.set(cookie.split("=")[0], cookie);
+        pages.push({ id: /name="request_id" value="([^"]+)"/.exec(await response.text())![1], verifier });
+      }
+      for (const page of pages) {
+        const response = await fetch(`${origin}/login`, form({ request_id: page.id, username: "admin", password }, { Cookie: [...jar.values()].join("; "), Origin: origin }));
+        expect(response.status).toBe(303);
+        const code = new URL(response.headers.get("location")!).searchParams.get("code")!;
+        const tokens = await fetch(`${origin}/token`, form({ client_id: client.client_id, code, code_verifier: page.verifier, grant_type: "authorization_code", redirect_uri: "http://127.0.0.1:54321/callback", resource: `${origin}/mcp` }));
+        expect(tokens.status).toBe(200);
+      }
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
   it("rejects anonymous access and advertises discovery", async () => {
     const response = await fetch(`${base}/mcp`, { method: "POST" });
     expect(response.status).toBe(401);

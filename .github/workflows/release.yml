@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable Windows update version (for example 0.4.2)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -17,8 +23,8 @@ jobs:
     name: semantic-release
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.release.outputs.version }}
-      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version || steps.manual.outputs.version }}
+      tag: ${{ steps.release.outputs.tag || steps.manual.outputs.tag }}
     permissions:
       contents: write # create the tag and the GitHub Release
       issues: write # open an issue if a release fails
@@ -47,9 +53,23 @@ jobs:
       # main is protected, and the workflow token deliberately cannot bypass it.
       - name: Release
         id: release
+        if: github.event_name == 'push'
         run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare a versioned Windows update
+        id: manual
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$UPDATE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/v$UPDATE_VERSION" -f "sha=$GITHUB_SHA"
+          gh release create "v$UPDATE_VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "v$UPDATE_VERSION"
+          echo "version=$UPDATE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$UPDATE_VERSION" >> "$GITHUB_OUTPUT"
 
   windows-installer:
     name: Windows x64 installer
@@ -73,15 +93,27 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: ./scripts/build-windows.ps1 -Version $env:RELEASE_VERSION -Release
-      - name: Install, verify, and uninstall the MSI
+      - name: Install, verify, and uninstall the setup executable
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
-        run: ./scripts/test-windows-installer.ps1 -Version $env:RELEASE_VERSION
+        run: ./scripts/test-windows-setup.ps1 -Version $env:RELEASE_VERSION
+      - name: Verify the portable ZIP and update policy
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: powershell.exe -NoProfile -STA -File installer/windows/test-updater.ps1 -Executable "artifacts/windows-$env:RELEASE_VERSION/payload/CodexMCP.exe" -Installer "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.zip" -Version $env:RELEASE_VERSION
       - name: Attach installer and SHA256 to the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.release.outputs.tag }}
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
-        run: gh release upload $env:RELEASE_TAG "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.msi" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.msi.sha256" --clobber
+        run: gh release upload $env:RELEASE_TAG "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64-setup.exe" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64-setup.exe.sha256" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.zip" "artifacts/CodexLocalMCP-$env:RELEASE_VERSION-windows-x64.zip.sha256" --clobber
+      - name: Publish the verified Windows update
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: gh release edit $env:RELEASE_TAG --draft=false --latest
