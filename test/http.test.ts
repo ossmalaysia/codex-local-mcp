@@ -61,6 +61,8 @@ async function approvedCode(clientId: string) {
   expect(nonce).toBeTruthy();
   expect(auth.response.headers.get("content-security-policy")).toContain(`style-src 'nonce-${nonce}'`);
   expect(auth.response.headers.get("content-security-policy")).not.toContain("unsafe-inline");
+  expect(auth.response.headers.get("referrer-policy")).toBe("same-origin");
+  expect(auth.response.headers.get("content-security-policy")).toContain("form-action 'self' http://127.0.0.1:54321;");
   expect(auth.html).not.toContain("<script");
   expect(auth.html).toContain('autocomplete="current-password"');
   const response = await fetch(`${base}/login`, form({ request_id: auth.id, username: "admin", password }, { Cookie: auth.cookie, Origin: base }));
