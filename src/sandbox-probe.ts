@@ -21,13 +21,17 @@ async function main() {
   const secret = path.join(privateRoot, `codex-mcp-probe-${randomUUID()}.txt`);
   const outsideWrite = `${secret}.write`;
   await fs.writeFile(secret, randomUUID(), { mode: 0o600 });
+  // Also test default-denied host access, separately from the explicit private-directory rule.
+  const outsideDirectory = await fs.mkdtemp(path.join(os.homedir(), ".codex-mcp-isolation-check-"));
+  const outsideSecret = path.join(outsideDirectory, "sentinel.txt");
+  await fs.writeFile(outsideSecret, randomUUID(), { mode: 0o600 });
   const listener = net.createServer(socket => socket.end());
   await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
   try {
     const port = (listener.address() as net.AddressInfo).port;
     const args = [...sandboxArguments("isolated", config.windowsSandbox, config.networkAccess, process.platform, config.runtimeRoot, config.privateRoot),
       "sandbox", "--include-managed-config", "--permission-profile", "codex_mcp_isolated", "--cd", workspace, "--",
-      process.execPath, "--preserve-symlinks", "--preserve-symlinks-main", fileURLToPath(new URL("./sandbox-check-child.js", import.meta.url)), secret, outsideWrite, String(port), String(config.networkAccess)];
+      process.execPath, "--preserve-symlinks", "--preserve-symlinks-main", fileURLToPath(new URL("./sandbox-check-child.js", import.meta.url)), secret, outsideWrite, String(port), String(config.networkAccess), outsideSecret];
     const output = new BoundedBuffer(6000);
     const code = await new Promise<number | null>((resolve, reject) => {
       const child = spawn(config.codexBin, args, { cwd: config.runtimeRoot || path.dirname(config.codexBin), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -43,7 +47,8 @@ async function main() {
     }
   } finally {
     await new Promise<void>(resolve => listener.close(() => resolve()));
-    for (const file of [secret, outsideWrite, path.join(workspace, "inside.txt")]) await fs.unlink(file).catch(() => {});
+    for (const file of [secret, outsideWrite, outsideSecret, path.join(workspace, "inside.txt")]) await fs.unlink(file).catch(() => {});
+    await fs.rmdir(outsideDirectory).catch(() => {});
     await fs.rmdir(workspace).catch(() => {});
   }
 }
