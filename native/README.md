@@ -117,7 +117,7 @@ Claude can override these defaults through MCP parameters:
 | `model` | Codex default | Select a supported Codex model. |
 | `reasoning_effort` | `default` | Select model effort; support depends on the model. |
 | `timeout_sec` | `300` | Limit task execution to 1–1800 seconds. |
-| `count` | `1` | Request 1–10 images. |
+| `count` | `1` | Request 1–10 images. Each image is a separate Codex run, and the runs work in parallel. |
 | `size` | `1024x1024` | Bound image dimensions, or use `auto`. |
 | `quality` | `low` | Request image generation quality. |
 | `output_format` | `jpeg` | Save JPEG, PNG, or WebP. |
@@ -128,6 +128,13 @@ Claude can override these defaults through MCP parameters:
 Dimensions preserve aspect ratio and never enlarge the source. Actual dimensions and bytes appear in the result and desktop activity.
 A file-size target is not a guarantee. The service does not reduce dimensions merely to reach a byte target.
 Image generation quality and background are prompt requests, subject to the image tool's support.
+
+Parallel image generation: a request with `count` above 1 starts one Codex run per image inside one job.
+`CODEX_MAX_RUNNING_JOBS` (default 4) caps Codex processes as well as jobs, so other jobs wait for a free slot.
+The job's `timeout_sec` is one deadline for all its runs. A run that waits for a slot receives only the time that remains.
+If some runs fail, the result still contains the images that succeeded, lists the failures, and reports an error.
+Separate requests also run in parallel when they use different workspaces. Requests for the same workspace run one at a time.
+Each run consumes image-generation usage on the signed-in OpenAI account, so parallel runs can reach rate limits sooner.
 
 The native service reads structured `codex exec --json` events. Activity shows stage history, elapsed time, event count, last-event age, selected settings, token usage, and output metadata.
 The five-second heartbeat does not count as a new Codex event. No invented percentage is shown.

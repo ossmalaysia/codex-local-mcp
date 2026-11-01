@@ -33,6 +33,8 @@ pub struct Jobs {
     entries: Mutex<HashMap<String, Arc<Job>>>,
     locks: Mutex<HashMap<PathBuf, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     slots: Arc<Semaphore>,
+    /// Caps Codex processes, not only jobs: one image job can start several runs.
+    runs: Arc<Semaphore>,
     pub cancel: CancellationToken,
     pub artifact_slots: Arc<Semaphore>,
 }
@@ -41,6 +43,7 @@ impl Jobs {
     pub fn new(config: Arc<Config>) -> Arc<Self> {
         Arc::new(Self {
             slots: Arc::new(Semaphore::new(config.max_jobs)),
+            runs: Arc::new(Semaphore::new(config.max_jobs)),
             config,
             entries: Mutex::new(HashMap::new()),
             locks: Mutex::new(HashMap::new()),
@@ -88,20 +91,20 @@ impl Jobs {
         options.validate()?;
         // The caller's own text, not the service-added image instructions, is
         // what a user can improve. Sent once; the desktop keeps merged fields.
-        let first = if self.config.activity_prompts {
+        let mut first = if self.config.activity_prompts {
             prompt_preview(prompt)
         } else {
             json!({})
         };
+        // Each requested image is its own Codex run, so several images generate
+        // at once instead of one after another in a single session.
+        if action == "codex_generate_image" {
+            first["parallel"] = json!(options.count.min(self.config.max_jobs as u64));
+        }
         let (prompt, open) = if action == "codex_generate_image" {
             (
                 format!(
-                    "{}: {prompt}\nSize: {}.\nQuality: {}.\nOutput format: {}.\nOutput compression: {} of 100.\nBackground: {}.\nTarget file size: {} KB per image.\n{}",
-                    if options.count > 1 {
-                        format!("Generate {} images", options.count)
-                    } else {
-                        "Generate an image".into()
-                    },
+                    "Generate an image: {prompt}\nSize: {}.\nQuality: {}.\nOutput format: {}.\nOutput compression: {} of 100.\nBackground: {}.\nTarget file size: {} KB per image.\n{}",
                     options.size,
                     options.quality,
                     options.output_format,
@@ -223,28 +226,16 @@ impl Jobs {
                 "running"
             },
         );
-        let owner = self.clone();
-        let progress_job = job.clone();
-        let report = Arc::new(move |event| owner.progress(&progress_job, event));
-        let run = process::run(
-            &self.config,
-            &job.workspace,
-            prompt,
-            timeout,
-            &job.options,
-            self.cancel.child_token(),
-            report,
-        )
-        .await?;
+        let image = job.action == "codex_generate_image";
+        let copies = if image { job.options.count.max(1) } else { 1 };
+        let mut single = job.options.clone();
+        single.count = 1;
+        let run = self.run_all(job, prompt, timeout, copies, &single).await?;
         self.phase(job, "collecting_files");
         let dir = job.workspace.clone();
         let config = self.config.clone();
-        let image_options = job.options.clone();
-        let image_thread = if job.action == "codex_generate_image" {
-            run.thread.clone()
-        } else {
-            None
-        };
+        let image_options = single;
+        let image_threads = if image { run.threads.clone() } else { vec![] };
         let codex_home = std::env::var_os("CODEX_HOME")
             .map(PathBuf::from)
             .or_else(|| {
@@ -254,8 +245,11 @@ impl Jobs {
         let artifact_permit = self.artifact_slots.clone().acquire_owned().await?;
         let collected = tokio::task::spawn_blocking(move || {
             let _permit = artifact_permit;
-            if let (Some(home), Some(thread)) = (codex_home, image_thread) {
-                crate::generated::collect(&home, &thread, &dir, &image_options)?;
+            // Collected only after every run's process tree has stopped.
+            if let Some(home) = codex_home {
+                for thread in &image_threads {
+                    crate::generated::collect(&home, thread, &dir, &image_options)?;
+                }
             }
             let after = workspace::snapshot(&dir);
             let changed: Vec<_> = after
@@ -317,6 +311,68 @@ impl Jobs {
         )
     }
 
+    /// Runs `copies` Codex sessions of the same prompt. The job's timeout is one
+    /// deadline for all of them, so a run that waits for a process slot gets
+    /// only the time that remains.
+    async fn run_all(
+        self: &Arc<Self>,
+        job: &Arc<Job>,
+        prompt: String,
+        timeout: u64,
+        copies: u64,
+        options: &crate::task_options::TaskOptions,
+    ) -> Result<Combined> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(timeout);
+        let mut set = tokio::task::JoinSet::new();
+        for index in 0..copies {
+            let owner = self.clone();
+            let job = job.clone();
+            let prompt = prompt.clone();
+            let options = options.clone();
+            set.spawn(async move {
+                let permit = tokio::select! {
+                    permit = owner.runs.clone().acquire_owned() => permit?,
+                    _ = owner.cancel.cancelled() => anyhow::bail!("Server stopped"),
+                };
+                let _permit = permit;
+                let left = deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_secs_f64()
+                    .ceil() as u64;
+                ensure!(left > 0, "The task timed out before this run could start");
+                let progress_owner = owner.clone();
+                let progress_job = job.clone();
+                let report = Arc::new(move |event| progress_owner.progress(&progress_job, event));
+                let run = process::run(
+                    &owner.config,
+                    &job.workspace,
+                    prompt,
+                    left,
+                    &options,
+                    owner.cancel.child_token(),
+                    report,
+                )
+                .await?;
+                Ok((index, run))
+            });
+        }
+        let mut runs = Vec::new();
+        let mut failures = Vec::new();
+        while let Some(joined) = set.join_next().await {
+            match joined.map_err(anyhow::Error::from).and_then(|r| r) {
+                Ok(run) => runs.push(run),
+                Err(e) => failures.push(e),
+            }
+        }
+        if runs.is_empty() {
+            return Err(failures
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| anyhow::anyhow!("Codex did not run")));
+        }
+        runs.sort_by_key(|(index, _)| *index);
+        Ok(Combined::new(runs, failures))
+    }
     fn progress(&self, job: &Job, event: Value) {
         if let Some(phase) = event["legacyPhase"].as_str() {
             // Retain compatibility with older CLI stderr markers.
@@ -335,7 +391,7 @@ impl Jobs {
                 state.steps += 1;
             }
             if event["type"] == "turn.completed" {
-                state.usage = event["usage"].clone();
+                add_usage(&mut state.usage, &event["usage"]);
             }
         }
         if event["type"] == "item.started" || event["type"] == "item.updated" {
@@ -402,6 +458,73 @@ impl Jobs {
     }
 }
 
+/// Parallel runs each report their own token usage; the job shows the total.
+fn add_usage(total: &mut Value, usage: &Value) {
+    let Some(usage) = usage.as_object() else {
+        return;
+    };
+    if !total.is_object() {
+        *total = json!({});
+    }
+    for (key, value) in usage {
+        if let Some(n) = value.as_u64() {
+            total[key] = json!(total[key].as_u64().unwrap_or(0) + n);
+        }
+    }
+}
+
+/// The outcome of one or more runs of the same job, reported as one result.
+struct Combined {
+    stdout: String,
+    stderr: String,
+    code: Option<i32>,
+    timed_out: bool,
+    duration: u128,
+    threads: Vec<String>,
+}
+impl Combined {
+    fn new(runs: Vec<(u64, process::Output)>, failures: Vec<anyhow::Error>) -> Self {
+        let many = runs.len() + failures.len() > 1;
+        let label = |index: u64, text: &str| {
+            if many {
+                format!("[run {}]\n{}", index + 1, text.trim())
+            } else {
+                text.trim().to_owned()
+            }
+        };
+        let stderr: Vec<_> = runs
+            .iter()
+            .filter(|(_, r)| !r.stderr.trim().is_empty())
+            .map(|(i, r)| label(*i, &r.stderr))
+            .chain(
+                failures
+                    .iter()
+                    .map(|e| format!("A parallel run did not finish: {e}")),
+            )
+            .collect();
+        Self {
+            stdout: runs
+                .iter()
+                .map(|(i, r)| label(*i, &r.stdout))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            stderr: stderr.join("\n\n"),
+            // Any failed run fails the job; its exit code is the one reported.
+            code: if failures.is_empty() {
+                runs.iter()
+                    .map(|(_, r)| r.code)
+                    .find(|c| *c != Some(0))
+                    .unwrap_or(Some(0))
+            } else {
+                None
+            },
+            timed_out: runs.iter().any(|(_, r)| r.timed_out),
+            duration: runs.iter().map(|(_, r)| r.duration).max().unwrap_or(0),
+            threads: runs.into_iter().filter_map(|(_, r)| r.thread).collect(),
+        }
+    }
+}
+
 /// The desktop drops activity lines over 16 KiB, so the prompt is bounded by
 /// characters and by its escaped JSON size, which can be six times larger.
 const PROMPT_PREVIEW_CHARS: usize = 2000;
@@ -419,6 +542,63 @@ fn prompt_preview(prompt: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn output(code: Option<i32>, thread: &str) -> process::Output {
+        process::Output {
+            stdout: format!("done {thread}"),
+            stderr: String::new(),
+            code,
+            timed_out: false,
+            duration: 10,
+            thread: Some(thread.into()),
+        }
+    }
+
+    #[test]
+    fn parallel_runs_combine_into_one_result() {
+        let single = Combined::new(vec![(0, output(Some(0), "a"))], vec![]);
+        assert_eq!(single.stdout, "done a");
+        assert_eq!(single.code, Some(0));
+        // run_all sorts runs by index before combining them.
+        let all = Combined::new(
+            vec![(0, output(Some(0), "a")), (1, output(Some(0), "b"))],
+            vec![],
+        );
+        assert_eq!(all.code, Some(0));
+        assert_eq!(all.threads, ["a", "b"]);
+        assert_eq!(all.stdout, "[run 1]\ndone a\n\n[run 2]\ndone b");
+        let failed = Combined::new(
+            vec![(0, output(Some(0), "a")), (1, output(Some(7), "b"))],
+            vec![],
+        );
+        assert_eq!(failed.code, Some(7));
+        let missing = Combined::new(
+            vec![(0, output(Some(0), "a"))],
+            vec![anyhow::anyhow!("timed out before start")],
+        );
+        assert_eq!(missing.code, None);
+        assert!(
+            missing
+                .stderr
+                .contains("did not finish: timed out before start")
+        );
+        assert_eq!(missing.threads, ["a"]);
+    }
+
+    #[test]
+    fn usage_adds_up_across_runs() {
+        let mut total = Value::Null;
+        add_usage(&mut total, &json!({"input_tokens":100,"output_tokens":20}));
+        add_usage(
+            &mut total,
+            &json!({"input_tokens":50,"output_tokens":5,"cached_input_tokens":7}),
+        );
+        add_usage(&mut total, &Value::Null);
+        assert_eq!(
+            total,
+            json!({"input_tokens":150,"output_tokens":25,"cached_input_tokens":7})
+        );
+    }
 
     #[test]
     fn prompt_preview_is_bounded() {

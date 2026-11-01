@@ -61,9 +61,19 @@ try {
   const failed = await local.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_FAILURE', wait_sec: 5 } }); assert.equal(failed.isError, true);
   const image = await local.callTool({ name: 'codex_generate_image', arguments: { prompt: 'fixture image', open: false, wait_sec: 5 } });
   assert.equal(image.isError, false); assert.ok(image.content.some(c => c.type === 'image')); assert.ok(image.content.some(c => c.type === 'resource_link'));
+  // Three images run as separate Codex sessions, at most CODEX_MAX_RUNNING_JOBS (2) at once.
+  const parallel = await local.callTool({ name: 'codex_generate_image', arguments: { prompt: 'FAKE_PARALLEL fixture', count: 3, open: false, workspace: 'parallel-images', wait_sec: 20 } });
+  assert.equal(parallel.isError, false, parallel.content[0].text);
+  assert.equal(parallel.content.filter(c => c.type === 'image').length, 3, 'Each parallel run should return one image');
+  const records = await fs.readdir(path.join(root, 'parallel-images', 'runs'));
+  const spans = await Promise.all(records.map(async f => (await fs.readFile(path.join(root, 'parallel-images', 'runs', f), 'utf8')).split(' ').map(Number)));
+  assert.equal(spans.length, 3);
+  const overlap = Math.max(...spans.map(([start]) => spans.filter(([s, e]) => s <= start && start < e).length));
+  assert.equal(overlap, 2, `Expected two runs at once, saw ${overlap}`);
+  assert.match(activity, /"parallel":2/); assert.match(activity, /"input_tokens":300/);
   assert.match(activity, /running_command/); assert.match(activity, /writing_files/); assert.ok(!activity.includes('private-prompt-sentinel')); assert.ok(!activity.includes(password)); assert.ok(!activity.includes('private-command-sentinel')); assert.match(activity, /"steps":3/); assert.match(activity, /"input_tokens":100/);
   await local.close();
-  console.log('Native stdio passed: contract, detached jobs, polling, artifacts, images, path denial, timeout, failure, child secrets, and private activity.');
+  console.log('Native stdio passed: contract, detached jobs, polling, artifacts, images, parallel images, path denial, timeout, failure, child secrets, and private activity.');
 
   // Reserve an unused local port. The child is managed and closes on stdin EOF.
   const reservation = createServer(); await listen(reservation); const port = reservation.address().port; await close(reservation);

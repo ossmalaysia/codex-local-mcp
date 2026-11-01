@@ -343,6 +343,8 @@ function taskParameters(task: Json) {
       `Background: ${opts.background ?? "opaque"}`,
       `Target: ${opts.target_file_kb ?? 256} KB`,
     );
+  // Each image is its own Codex run; the service caps how many run at once.
+  if (task.parallel > 1) params.push(`Parallel: ${task.parallel} at once`);
   const chips = document.createElement("div");
   chips.className = "task-params";
   for (const value of params) {

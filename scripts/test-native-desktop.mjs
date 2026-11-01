@@ -21,7 +21,7 @@ assert.ok(
 const app = path.resolve(
   mode === "legacy"
     ? "artifacts/legacy-upgrade-test-0.5/CodexMCP.exe"
-    : "artifacts/native-desktop-0.8.1/payload/CodexMCP.exe",
+    : "artifacts/native-desktop-0.9.0/payload/CodexMCP.exe",
 );
 const root = await mkdtemp(path.resolve("artifacts/desktop-native-test-"));
 if (mode === "saved") {
@@ -84,7 +84,7 @@ try {
   await page.getByRole("heading", { name: "Choose a place to work" }).waitFor();
   const state = () =>
     page.evaluate(() => window.__TAURI__.core.invoke("state"));
-  assert.equal((await state()).version, "0.8.1");
+  assert.equal((await state()).version, "0.9.0");
   if (mode === "saved") {
     assert.equal((await state()).settings.passwordSaved, true);
     const account = await page.evaluate(() =>
