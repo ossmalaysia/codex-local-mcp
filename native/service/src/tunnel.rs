@@ -34,9 +34,9 @@ pub async fn start(port: u16, public: Url, token: &str, cancel: CancellationToke
         );
     }
     let temp = std::env::temp_dir().join(format!("codex-mcp-tunnel-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&temp)?;
+    tokio::fs::create_dir(&temp).await?;
     let config = TempConfig(temp);
-    std::fs::write(config.0.join("config.yml"), "{}\n")?;
+    tokio::fs::write(config.0.join("config.yml"), "{}\n").await?;
     let mut cmd = process::command(&bin);
     cmd.env_remove("OPENAI_API_KEY")
         .env_remove("CODEX_HOME")

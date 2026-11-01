@@ -106,6 +106,86 @@ pub struct Collected {
     pub lines: Vec<String>,
     pub count: usize,
 }
+
+struct Preview {
+    data: String,
+    mime: &'static str,
+    note: String,
+}
+fn make_preview(
+    image: &image::DynamicImage,
+    data: &[u8],
+    mime: &'static str,
+    budget: usize,
+) -> Option<Preview> {
+    if data.len().div_ceil(3) * 4 <= budget {
+        return Some(Preview {
+            data: STANDARD.encode(data),
+            mime,
+            note: String::new(),
+        });
+    }
+    if budget < 1024 {
+        return None;
+    }
+    for size in [1024, 768, 512, 256, 128] {
+        let small = image.thumbnail(size, size).to_rgb8();
+        let mut encoded = Vec::new();
+        if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 70)
+            .encode_image(&small)
+            .is_err()
+            || encoded.len().div_ceil(3) * 4 > budget
+        {
+            continue;
+        }
+        return Some(Preview {
+            data: STANDARD.encode(encoded),
+            mime: "image/jpeg",
+            note: format!(
+                "preview {}x{}; original available through resource link",
+                small.width(),
+                small.height()
+            ),
+        });
+    }
+    None
+}
+
+fn append_image(
+    config: &Config,
+    real: &Path,
+    name: &str,
+    line: &mut String,
+    result: &mut Collected,
+    spent: &mut usize,
+) -> Result<()> {
+    let Some(mime) = mime(real) else {
+        return Ok(());
+    };
+    // Decode bounded files only. Decoder limits apply before pixel allocation.
+    let (data, _) = workspace::read(&config.root, real, 50_000_000)?;
+    let mut reader = image::ImageReader::new(Cursor::new(&data));
+    reader.set_format(image::guess_format(&data)?);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode()?;
+    line.push_str(&format!(", {}x{}", image.width(), image.height()));
+    let remaining = config.inline.min(config.response.saturating_sub(*spent));
+    if let Some(preview) = make_preview(&image, &data, mime, remaining) {
+        *spent += preview.data.len();
+        result.content.push(text(if preview.note.is_empty() {
+            format!("Image: {name}")
+        } else {
+            format!("Image: {name} ({})", preview.note)
+        }));
+        result.content.push(json!({"type":"image", "mimeType":preview.mime, "data":preview.data, "annotations":{"audience":["user","assistant"],"priority":0.9}}));
+    }
+    Ok(())
+}
+
 pub fn collect(config: &Config, dir: &Path, paths: &[std::path::PathBuf], open: bool) -> Collected {
     let mut result = Collected {
         content: vec![],
@@ -125,59 +205,8 @@ pub fn collect(config: &Config, dir: &Path, paths: &[std::path::PathBuf], open: 
         };
         let name = path.to_string_lossy().replace('\\', "/");
         let mut line = format!("- {name} ({} bytes)", meta.len());
-        if let Some(mime) = mime(&real) {
-            // Decode only bounded files and images. Never allocate from dimensions without limits.
-            if meta.len() <= 50_000_000
-                && let Ok((data, _)) = workspace::read(&config.root, &real, 50_000_000)
-            {
-                let remaining = config.inline.min(config.response.saturating_sub(spent));
-                let mut reader = image::ImageReader::new(Cursor::new(&data));
-                if let Ok(format) = image::guess_format(&data) {
-                    reader.set_format(format);
-                }
-                let mut limits = image::Limits::default();
-                limits.max_image_width = Some(16384);
-                limits.max_image_height = Some(16384);
-                limits.max_alloc = Some(128 * 1024 * 1024);
-                reader.limits(limits);
-                if let Ok(image) = reader.decode() {
-                    line.push_str(&format!(", {}x{}", image.width(), image.height()));
-                    let mut preview = None;
-                    if data.len().div_ceil(3) * 4 <= remaining {
-                        preview = Some((STANDARD.encode(&data), mime, String::new()));
-                    } else if remaining >= 1024 {
-                        for size in [1024, 768, 512, 256, 128] {
-                            let small = image.thumbnail(size, size).to_rgb8();
-                            let mut encoded = Vec::new();
-                            if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 70)
-                                .encode_image(&small)
-                                .is_ok()
-                                && encoded.len().div_ceil(3) * 4 <= remaining
-                            {
-                                preview = Some((
-                                    STANDARD.encode(encoded),
-                                    "image/jpeg",
-                                    format!(
-                                        "preview {}x{}; original available through resource link",
-                                        small.width(),
-                                        small.height()
-                                    ),
-                                ));
-                                break;
-                            }
-                        }
-                    }
-                    if let Some((encoded, kind, note)) = preview {
-                        spent += encoded.len();
-                        result.content.push(text(if note.is_empty() {
-                            format!("Image: {name}")
-                        } else {
-                            format!("Image: {name} ({note})")
-                        }));
-                        result.content.push(json!({"type":"image", "mimeType":kind, "data":encoded, "annotations":{"audience":["user","assistant"],"priority":0.9}}));
-                    }
-                }
-            }
+        if mime(&real).is_some() {
+            let _ = append_image(config, &real, &name, &mut line, &mut result, &mut spent);
             if open {
                 let _ = open_image(&real);
             }

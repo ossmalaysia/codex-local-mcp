@@ -1,5 +1,13 @@
 use crate::{activity, artifacts, jobs::Jobs};
-use rmcp::{ErrorData, RoleServer, ServerHandler, model::*, service::RequestContext};
+use rmcp::{
+    ErrorData, RoleServer, ServerHandler,
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ListResourceTemplatesResult,
+        ListResourcesResult, ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, ServerConfig,
+    },
+    service::RequestContext,
+};
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
 

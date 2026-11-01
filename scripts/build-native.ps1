@@ -6,10 +6,10 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
 $cargo = Get-Command cargo -ErrorAction SilentlyContinue
-if (!$cargo) { $cargo = Get-Command (Join-Path $env:USERPROFILE '.cargo/bin/cargo.exe') -ErrorAction Stop }
+if (-not $cargo) { $cargo = Get-Command (Join-Path $env:USERPROFILE '.cargo/bin/cargo.exe') -ErrorAction Stop }
 $destination = [IO.Path]::GetFullPath((Join-Path $projectRoot $Output))
 $boundary = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts')) + '\'
-if (!$destination.StartsWith($boundary, [StringComparison]::OrdinalIgnoreCase)) { throw 'Native build output must stay inside artifacts' }
+if (-not $destination.StartsWith($boundary, [StringComparison]::OrdinalIgnoreCase)) { throw 'Native build output must stay inside artifacts' }
 $previousVersion = $env:CODEX_MCP_BUILD_VERSION
 try {
   $env:CODEX_MCP_BUILD_VERSION = $Version

@@ -62,11 +62,11 @@ pub async fn check(config: &Config) -> Result<()> {
         secret,
         outside,
     };
-    std::fs::create_dir(&files.workspace)?;
-    std::fs::create_dir(&files.outside)?;
-    std::fs::create_dir_all(&config.private)?;
-    std::fs::write(&files.secret, id.to_string())?;
-    std::fs::write(files.outside.join("sentinel.txt"), id.to_string())?;
+    tokio::fs::create_dir(&files.workspace).await?;
+    tokio::fs::create_dir(&files.outside).await?;
+    tokio::fs::create_dir_all(&config.private).await?;
+    tokio::fs::write(&files.secret, id.to_string()).await?;
+    tokio::fs::write(files.outside.join("sentinel.txt"), id.to_string()).await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let mut cmd = process::command(&config.bin);
     cmd.args(config.sandbox_args())
