@@ -53,7 +53,7 @@ namespace CodexLocalMCP {
           if (total > UpdateClient.MaxBytes) throw new InvalidDataException("The extracted update exceeds the supported size.");
         }
         var manifest = archive.GetEntry("release-manifest.json");
-        if (manifest == null || manifest.Length > 131072 || archive.GetEntry("CodexMCP.exe") == null || archive.GetEntry("runtime/node/node.exe") == null || archive.GetEntry("app/dist/index.js") == null)
+        if (manifest == null || manifest.Length > 131072 || archive.GetEntry("CodexMCP.exe") == null)
           throw new InvalidDataException("The portable update is incomplete.");
         using (var stream = manifest.Open())
         using (var reader = new StreamReader(stream, Encoding.UTF8)) {
@@ -64,6 +64,9 @@ namespace CodexLocalMCP {
           }
           var text = bounded.ToString();
           var data = new JavaScriptSerializer { MaxJsonLength = 131072, RecursionLimit = 20 }.DeserializeObject(text) as IDictionary<string, object>;
+          bool native = data != null && data.ContainsKey("desktop") && Equals(data["desktop"], "tauri");
+          if (native ? archive.GetEntry("runtime/codex-mcp-service.exe") == null : archive.GetEntry("runtime/node/node.exe") == null || archive.GetEntry("app/dist/index.js") == null)
+            throw new InvalidDataException("The application runtime is incomplete.");
           if (data == null || !data.ContainsKey("product") || !Equals(data["product"], "codex-local-mcp") || !data.ContainsKey("version") || !Equals(data["version"], release.Version) || !data.ContainsKey("architecture") || !Equals(data["architecture"], "x64"))
             throw new InvalidDataException("The portable update product, version, or architecture does not match.");
         }

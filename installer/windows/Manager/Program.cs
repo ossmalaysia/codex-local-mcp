@@ -195,10 +195,12 @@ namespace CodexLocalMCP {
     }
     static string Quote(string path) => "\"" + path.Replace("\"", "") + "\"";
     string Node => Path.Combine(installRoot, "runtime", "node", "node.exe");
+    string NativeService => Path.Combine(installRoot, "runtime", "codex-mcp-service.exe");
+    bool UsesNativeService => File.Exists(NativeService);
     string Script(string name) => Quote(Path.Combine(installRoot, "app", "dist", name));
     async Task CheckSandbox() {
       Write("Checking real Windows sandbox isolation. This does not call an AI model.");
-      var info = Info(Node, Script("sandbox-probe.js"), true);
+      var info = UsesNativeService ? Info(NativeService, "--sandbox-probe", true) : Info(Node, Script("sandbox-probe.js"), true);
       info.EnvironmentVariables.Remove("CODEX_MCP_PASSWORD"); info.EnvironmentVariables.Remove("CODEX_MCP_TUNNEL_TOKEN");
       using (var process = Process.Start(info)) {
         var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
@@ -213,14 +215,22 @@ namespace CodexLocalMCP {
       ConnectionStatus("Checking sandbox…");
       Save();
       using (var cloudflare = new CloudflareSetup()) await cloudflare.Reconcile(saved);
-      await CheckSandbox();
+      if (!UsesNativeService) await CheckSandbox(); // The native service enforces its own startup probe.
       ConnectionStatus("Opening Cloudflare connection…");
-      var info = Info(Node, Script("index.js") + " --tunnel --managed", true);
+      var info = UsesNativeService ? Info(NativeService, "--tunnel --managed --secrets-stdin", true) : Info(Node, Script("index.js") + " --tunnel --managed", true);
+      if (UsesNativeService) { info.EnvironmentVariables.Remove("CODEX_MCP_PASSWORD"); info.EnvironmentVariables.Remove("CODEX_MCP_TUNNEL_TOKEN"); }
       server = new Process { StartInfo = info, EnableRaisingEvents = true };
       server.OutputDataReceived += (s, e) => { if (e.Data != null) Write(e.Data); };
       server.ErrorDataReceived += (s, e) => { if (e.Data != null) Write(e.Data); };
       server.Exited += (s, e) => { if (!IsDisposed) BeginInvoke(new Action(() => { start.Enabled = true; stop.Enabled = false; ConnectionStatus("Not connected"); Write("Server stopped."); })); };
-      server.Start(); server.BeginOutputReadLine(); server.BeginErrorReadLine(); stop.Enabled = true;
+      server.Start();
+      if (UsesNativeService) {
+        var secrets = new JavaScriptSerializer().Serialize(new { password = Store.Unprotect(saved.Password), tunnelToken = Store.Unprotect(saved.TunnelToken) });
+        var bytes = Encoding.UTF8.GetBytes(secrets + "\n");
+        try { server.StandardInput.BaseStream.Write(bytes, 0, bytes.Length); server.StandardInput.BaseStream.Flush(); }
+        finally { Array.Clear(bytes, 0, bytes.Length); }
+      }
+      server.BeginOutputReadLine(); server.BeginErrorReadLine(); stop.Enabled = true;
     }
     async Task StopServer() {
       var process = server;

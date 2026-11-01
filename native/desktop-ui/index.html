@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Codex Local MCP</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <aside>
+      <div class="brand">
+        <img src="logo.png" alt="" width="44" height="44" /><strong
+          >Codex Local MCP</strong
+        >
+      </div>
+      <p class="muted">Your workspace. Connected to Claude.</p>
+      <nav aria-label="Setup">
+        <button data-page="workspace" class="selected">
+          1 <span>Workspace</span></button
+        ><button data-page="accounts">2 <span>Accounts</span></button
+        ><button data-page="connection">3 <span>Connection</span></button
+        ><button data-page="claude">4 <span>Use in Claude</span></button
+        ><button data-page="activity">
+          ◷ <span>Activity</span><i id="active-count"></i>
+        </button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div id="connection-badge" class="badge">Stopped</div>
+        <p class="muted" id="version"></p>
+        <button id="check-update" class="quiet">Check for updates</button
+        ><button id="install-update" class="primary" hidden>
+          Install update</button
+        ><small
+          >Closing this window keeps the connection running. Use the tray menu
+          to exit.</small
+        >
+      </div>
+    </aside>
+    <main>
+      <output id="notice" aria-live="polite" hidden></output>
+      <section id="workspace" class="page">
+        <div class="eyebrow">STEP 1 OF 4</div>
+        <h1>Choose a place to work</h1>
+        <p class="lead">
+          Codex can write files inside this folder. Windows isolation protects
+          your other files.
+        </p>
+        <div class="card">
+          <label for="folder">Workspace folder</label>
+          <div class="row">
+            <input id="folder" autocomplete="off" /><button id="browse">
+              Browse…
+            </button>
+          </div>
+          <p class="hint">Each request gets its own folder here.</p>
+          <button id="open-workspace" class="quiet">Open folder</button>
+          <hr />
+          <label for="backend">Windows sandbox</label
+          ><select id="backend">
+            <option value="mxc">MXC · recommended</option>
+            <option value="elevated">Windows restricted token</option></select
+          ><label class="check"
+            ><input type="checkbox" id="network" />Allow Codex commands to use
+            the internet</label
+          >
+          <p class="hint">
+            Leave this off unless your task needs network access.
+          </p>
+          <button id="sandbox-check">Check sandbox</button>
+        </div>
+        <div class="footer">
+          <button class="primary" data-next="accounts">
+            Save and continue →
+          </button>
+        </div>
+      </section>
+      <section id="accounts" class="page" hidden>
+        <div class="eyebrow">STEP 2 OF 4</div>
+        <h1>Your accounts, clearly connected</h1>
+        <p class="lead">
+          Sign in to OpenAI for Codex. Use a separate MCP password to connect
+          Claude.
+        </p>
+        <div class="card">
+          <div class="card-head">
+            <h2>OpenAI account</h2>
+            <span id="openai-state" class="badge">Checking…</span>
+          </div>
+          <p id="account-detail" class="hint">Checking your saved sign-in.</p>
+          <button id="account-login">Sign in to OpenAI</button
+          ><button id="account-status" class="quiet">Refresh status</button>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>MCP login</h2>
+            <span id="password-state" class="badge">Not set</span>
+          </div>
+          <label for="username">Username</label
+          ><input id="username" autocomplete="username" /><label for="password"
+            >New password</label
+          ><input
+            id="password"
+            type="password"
+            autocomplete="new-password"
+            placeholder="Leave blank to keep your saved password"
+          />
+          <p class="hint">
+            Use at least 24 characters. Your saved password stays protected on
+            this PC.
+          </p>
+          <div class="row wrap">
+            <button id="generate-password">Generate secure password</button
+            ><button id="copy-password">Copy saved password</button>
+          </div>
+        </div>
+        <div class="footer">
+          <button class="primary" data-next="connection">
+            Save and continue →
+          </button>
+        </div>
+      </section>
+      <section id="connection" class="page" hidden>
+        <div class="eyebrow">STEP 3 OF 4</div>
+        <h1>Bring your workspace online</h1>
+        <p class="lead">
+          Cloudflare gives Claude an HTTPS connection to this PC.
+        </p>
+        <div class="card">
+          <label for="tunnel">Connection type</label
+          ><select id="tunnel">
+            <option value="quick">Quick Tunnel · temporary address</option>
+            <option value="named">Custom domain · permanent address</option>
+          </select>
+          <p id="tunnel-hint" class="hint"></p>
+          <div id="named" hidden>
+            <div id="saved-address" class="success" hidden></div>
+            <div class="card-head">
+              <h2>Cloudflare account</h2>
+              <span id="cloudflare-state" class="badge">Not checked</span>
+            </div>
+            <button id="cloudflare-login">Sign in to Cloudflare</button
+            ><button id="cloudflare-status" class="quiet">
+              Refresh domains
+            </button>
+            <p class="hint">
+              Your browser opens for sign-in. Choose the domain you want to use.
+            </p>
+            <div id="domain-fields" hidden>
+              <label for="domain">Domain</label
+              ><select id="domain"></select
+              ><label for="prefix">Address name</label
+              ><input id="prefix" value="codex" maxlength="63" /><button
+                id="cloudflare-create"
+              >
+                Create or use this address
+              </button>
+            </div>
+            <details>
+              <summary>Use an existing tunnel token</summary>
+              <label for="public-url">HTTPS origin</label
+              ><input
+                id="public-url"
+                placeholder="https://codex.example.com"
+              /><label for="tunnel-token">Tunnel token</label
+              ><input
+                id="tunnel-token"
+                type="password"
+                autocomplete="off"
+                placeholder="Leave blank to keep the saved token"
+              />
+              <p id="token-state" class="hint"></p>
+            </details>
+          </div>
+          <details>
+            <summary>Advanced settings</summary>
+            <label for="port">Local listener port</label
+            ><input id="port" type="number" min="1024" max="65535" />
+          </details>
+        </div>
+        <div class="row wrap">
+          <button id="start" class="primary">Start connection</button
+          ><button id="stop">Stop</button
+          ><button data-page="claude">Continue to Claude →</button>
+        </div>
+        <p class="hint">
+          Start saves your settings, checks isolation, and opens the tunnel.
+        </p>
+      </section>
+      <section id="claude" class="page" hidden>
+        <div class="eyebrow">STEP 4 OF 4</div>
+        <h1>Connect Claude</h1>
+        <p class="lead">Add this address as a custom connector in Claude.</p>
+        <div class="card">
+          <div class="card-head">
+            <h2>Your MCP server URL</h2>
+            <span id="endpoint-state" class="badge">Offline</span>
+          </div>
+          <label class="sr-only" for="endpoint">MCP server URL</label
+          ><input
+            id="endpoint"
+            readonly
+            placeholder="Start the connection to get your URL"
+          />
+          <p id="endpoint-hint" class="hint"></p>
+          <div class="row wrap">
+            <button id="copy-url">Copy URL</button
+            ><button id="open-claude" class="primary">
+              Open Claude settings ↗
+            </button>
+          </div>
+          <ol>
+            <li>In Claude, select <strong>Add custom connector</strong>.</li>
+            <li>Paste this URL and connect.</li>
+            <li>Enter your MCP username and saved password.</li>
+          </ol>
+          <button id="claude-copy-password" class="quiet">
+            Copy saved password
+          </button>
+        </div>
+        <p class="hint">
+          Keep this app running and this PC awake while Claude uses Codex.
+        </p>
+        <button data-page="activity">View activity →</button>
+      </section>
+      <section id="activity" class="page" hidden>
+        <div class="eyebrow">LIVE ACTIVITY</div>
+        <h1>See what Codex is doing</h1>
+        <p class="lead">
+          Requests and task progress appear here while your connection runs.
+        </p>
+        <div class="card">
+          <div class="card-head">
+            <h2>Connection</h2>
+            <span id="activity-status" class="badge"></span>
+          </div>
+          <p id="last-request" class="hint">No requests yet.</p>
+        </div>
+        <div id="tasks"></div>
+        <p class="hint">
+          Activity shows task status and workspace paths. Prompts, credentials,
+          and task output stay out of this view.
+        </p>
+      </section>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

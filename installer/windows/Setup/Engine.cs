@@ -60,6 +60,27 @@ namespace CodexLocalMCP {
         if (stream == null || stream.Length != release.Size || UpdateClient.Hex(hash.ComputeHash(stream)) != release.Sha256) throw new InvalidDataException("The embedded package failed SHA256 verification.");
       }
     }
+    static bool WebViewInstalled() {
+      const string path = @"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+      foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
+        foreach (var view in new[] { RegistryView.Registry32, RegistryView.Registry64 })
+          using (var root = RegistryKey.OpenBaseKey(hive, view)) using (var key = root.OpenSubKey(path)) {
+            Version value; if (Version.TryParse(key?.GetValue("pv") as string, out value) && value.Major > 0) return true;
+          }
+      return false;
+    }
+    static void EnsureWebView(string cache, IProgress<Tuple<int,string>> progress) {
+      using (var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("WebView2.exe")) {
+        if (resource == null || WebViewInstalled()) return;
+        progress?.Report(Tuple.Create(90, "Installing Microsoft WebView2. This can take a few minutes…"));
+        var executable = Path.Combine(cache, "MicrosoftEdgeWebview2Setup.exe");
+        using (var output = new FileStream(executable, FileMode.CreateNew, FileAccess.Write, FileShare.None)) resource.CopyTo(output);
+        using (var process = Process.Start(UpdateInstaller.CleanProcess(executable, "/silent /install"))) {
+          if (!process.WaitForExit(300000)) throw new IOException("WebView2 setup is still running. Finish it, then run this installer again.");
+          if (process.ExitCode != 0 || !WebViewInstalled()) throw new IOException("Microsoft WebView2 could not be installed. Check your internet connection, then try setup again.");
+        }
+      }
+    }
     internal static InstallRecord Install(string requested, string testId, bool shortcuts, IProgress<Tuple<int,string>> progress, CancellationToken cancellation) {
       bool test = testId != null; var directory = Path.GetFullPath(requested).TrimEnd('\\');
       ValidateDirectory(directory); EnsureStopped(directory, test); Store.EnsurePrivateRoot();
@@ -105,6 +126,7 @@ namespace CodexLocalMCP {
           }
         }
         if (FileVersionInfo.GetVersionInfo(Path.Combine(stage, "CodexMCP.exe")).ProductVersion.Split('+')[0] != release.Version) throw new InvalidDataException("The application version does not match setup.");
+        EnsureWebView(cache, progress);
         cancellation.ThrowIfCancellationRequested(); EnsureStopped(directory, test);
         progress?.Report(Tuple.Create(92, "Finishing installation…"));
         if (Directory.Exists(directory)) { Directory.Move(directory, backup); movedOld = true; }
@@ -174,6 +196,13 @@ namespace CodexLocalMCP {
       if (!string.IsNullOrEmpty(record.Shortcut) && File.Exists(record.Shortcut)) {
         var expected=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs),"Codex Local MCP.lnk");
         if (record.Shortcut==expected) { dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")); dynamic link=shell.CreateShortcut(expected); if ((string)link.TargetPath==Path.Combine(directory,"CodexMCP.exe")) File.Delete(expected); }
+      }
+      const string notificationKey = @"Software\Classes\AppUserModelId\com.ossmalaysia.codex-local-mcp";
+      using (var key = Registry.CurrentUser.OpenSubKey(notificationKey)) {
+        if (string.Equals(key?.GetValue("ApplicationPath") as string, Path.Combine(directory,"CodexMCP.exe"), StringComparison.OrdinalIgnoreCase)) {
+          key.Close();
+          try { Registry.CurrentUser.DeleteSubKey(notificationKey, false); } catch (IOException) { /* Preserve unexpected subkeys. */ }
+        }
       }
       Registry.CurrentUser.DeleteSubKeyTree(record.RegistryKey,false);
       using (var key=Registry.CurrentUser.OpenSubKey(AppKey)) if ((string)key?.GetValue("InstallLocation")==directory) Registry.CurrentUser.DeleteSubKeyTree(AppKey,false);
