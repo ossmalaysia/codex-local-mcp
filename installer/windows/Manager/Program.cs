@@ -128,8 +128,10 @@ namespace CodexLocalMCP {
       workspace.Text = saved.Workspace; username.Text = saved.Username; network.Checked = saved.Network;
       backend.SelectedIndex = saved.Backend == "elevated" ? 1 : 0; tunnel.SelectedIndex = saved.Tunnel == "named" ? 1 : 0;
       publicUrl.Text = saved.PublicUrl; port.Value = Math.Max(1024, Math.Min(65535, saved.Port));
+      publicUrl.TextChanged += (s, e) => UpdateEndpointPreview();
       tunnel.SelectedIndexChanged += (s, e) => UpdateTunnelFields();
       UpdateTunnelFields();
+      UpdateSavedCloudflare();
       login.Click += async (s, e) => await Operation(SignIn);
       check.Click += async (s, e) => await Operation(async () => { Save(); await CheckSandbox(); });
       start.Click += async (s, e) => await Operation(StartServer);
@@ -140,6 +142,8 @@ namespace CodexLocalMCP {
         if (server != null && !server.HasExited) { e.Cancel = true; await StopServer(); Close(); }
       };
       Write("Ready. Follow the four setup steps on the left.");
+      FormClosed += (s, e) => accountLifetime.Cancel();
+      if (backgroundServices) Shown += async (s, e) => await RefreshAccount();
       if (backgroundServices) InitializeTray(version);
     }
     void Save() {
@@ -149,7 +153,8 @@ namespace CodexLocalMCP {
         Password = password.Text.Length > 0 ? Store.Protect(password.Text) : saved.Password,
         TunnelToken = token.Text.Length > 0 ? Store.Protect(token.Text) : saved.TunnelToken };
       Store.Validate(next, installRoot); Store.Save(next); saved = next; password.Clear(); token.Clear();
-      accountState.Text = "MCP password saved for this Windows user.";
+      UpdatePasswordHint();
+      UpdateSavedCloudflare();
     }
     void Guard(Action action) { try { if (busy) throw new Exception("Wait for the current check to finish."); if (server != null && !server.HasExited) throw new Exception("Stop the server before changing settings."); action(); } catch (Exception error) { MessageBox.Show(this, error.Message, "Codex Local MCP", MessageBoxButtons.OK, MessageBoxIcon.Error); } }
     async Task Operation(Func<Task> action) {

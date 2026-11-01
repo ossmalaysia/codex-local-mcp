@@ -19,6 +19,8 @@ namespace CodexLocalMCP {
     readonly Panel[] pages = new Panel[4];
     readonly Label state = new Label(), accountState = new Label(), progress = new Label(), passwordState = new Label(), tunnelHint = Copy(" ", 9);
     readonly TextBox endpoint = new TextBox { ReadOnly = true };
+    readonly Label endpointHint = Copy("Start the connection in step 3 to get your URL.", 9);
+    bool endpointConnected;
     readonly FlowLayoutPanel namedFields = new FlowLayoutPanel();
     readonly ToolTip tips = new ToolTip();
     FlowLayoutPanel sidebarFooter;
@@ -112,15 +114,16 @@ namespace CodexLocalMCP {
       generate.Click += (s, e) => Guard(() => { var bytes = new byte[24]; using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(bytes); password.Text = Convert.ToBase64String(bytes); Write("New password generated. Copy it before continuing."); });
       var copyPassword = Style(new Button(), "Copy password");
       generate.AccessibleDescription = "Creates a random 32-character MCP password. Copy it before continuing.";
-      copyPassword.Click += (s, e) => { try { var value = password.Text.Length > 0 ? password.Text : Store.Unprotect(saved.Password); if (value.Length == 0) throw new Exception("Enter or generate a password first."); Clipboard.SetText(value); accountState.Text = "Password copied. Store it in your password manager."; } catch (Exception error) { accountState.Text = error.Message; } };
+      copyPassword.Click += (s, e) => { try { var value = password.Text.Length > 0 ? password.Text : Store.Unprotect(saved.Password); if (value.Length == 0) throw new Exception("Enter or generate a password first."); Clipboard.SetText(value); passwordState.Text = "Password copied. Store it in your password manager."; } catch (Exception error) { passwordState.Text = error.Message; } };
       var show = new CheckBox { Text = "Show password", AutoSize = true, Margin = new Padding(0, 10, 0, 0) };
       show.CheckedChanged += (s, e) => password.UseSystemPasswordChar = !show.Checked;
       accounts.Controls.Add(Row(generate, copyPassword, show));
       accounts.Controls.Add(Copy("OpenAI account", 13, true));
-      accounts.Controls.Add(Copy("Sign in to enable Codex. The app uses its own Codex login folder.", 9));
-      accounts.Controls.Add(Row(Style(login, "Sign in to Codex", true)));
+      accounts.Controls.Add(Copy("The app checks its saved OpenAI sign-in. You can keep the current account.", 9));
+      accounts.Controls.Add(Row(Style(login, "Sign in to OpenAI", true), Style(refreshAccount, "Refresh status")));
+      refreshAccount.Click += async (s, e) => { if (!busy) await RefreshAccount(); };
       accountState.AutoSize = true; accountState.MaximumSize = new Size(620, 0); accountState.ForeColor = Muted;
-      accountState.Text = "Sign-in opens a terminal or browser. Follow its instructions."; accounts.Controls.Add(accountState);
+      accountState.Text = "Checking OpenAI sign-in…"; accounts.Controls.Add(accountState);
 
       var connection = Page(2, "STEP 3 OF 4", "Bring your workspace online", "Cloudflare provides an HTTPS connection from Claude to this PC.");
       tunnel.Items.AddRange(new object[] { "Quick Tunnel · no Cloudflare account needed", "Named Tunnel · permanent hostname" });
@@ -146,7 +149,7 @@ namespace CodexLocalMCP {
       connection.Controls.Add(Copy("Start saves your settings, tests isolation, and opens the tunnel.", 9));
 
       var use = Page(3, "STEP 4 OF 4", "Connect Claude", "Use this remote connection alongside your existing Claude plugins.");
-      Field(use, "Your MCP server URL", endpoint, "Start the connection in step 3 to get your URL.");
+      Field(use, "Your MCP server URL", endpoint); use.Controls.Add(endpointHint);
       Style(copyUrl, "Copy URL", true); copyUrl.Enabled = false;
       copyUrl.Click += (s, e) => { if (endpoint.Text.Length > 0) { try { Clipboard.SetText(endpoint.Text); Write("MCP URL copied."); } catch { Write("Clipboard is unavailable. Select the URL and copy it manually."); } } };
       use.Controls.Add(Row(copyUrl));
@@ -195,27 +198,41 @@ namespace CodexLocalMCP {
     void UpdatePasswordHint() {
       bool stored = password.Text.Length == 0 && saved.Password.Length > 0;
       bool valid = stored || password.Text.Length >= 24;
-      passwordState.Text = stored ? "Saved password is available." : password.Text.Length == 0 ? "Enter a password or generate one below." : valid ? "Password length is sufficient." : "Add " + (24 - password.Text.Length) + " more characters.";
+      passwordState.Text = stored ? "Password saved. You do not need to enter it again." : password.Text.Length == 0 ? "Enter a password or generate one below." : valid ? "New password ready. Select Continue to save it." : "Add " + (24 - password.Text.Length) + " more characters.";
       passwordState.ForeColor = valid ? Color.FromArgb(25, 116, 85) : Muted;
     }
-    void UpdateTunnelFields() { namedFields.Visible = tunnel.SelectedIndex == 1; tunnelHint.Text = tunnel.SelectedIndex == 1 ? "Use a stable hostname from your Cloudflare account." : "Quick Tunnel creates a new URL each time you start it."; }
+    void UpdateTunnelFields() { namedFields.Visible = tunnel.SelectedIndex == 1; tunnelHint.Text = tunnel.SelectedIndex == 1 ? "Use a stable hostname from your Cloudflare account." : "Quick Tunnel creates a new URL each time you start it."; UpdateEndpointPreview(); }
+    void UpdateEndpointPreview() {
+      if (endpointConnected) return;
+      Uri origin;
+      if (tunnel.SelectedIndex == 1 && Uri.TryCreate(publicUrl.Text.Trim(), UriKind.Absolute, out origin) && origin.Scheme == "https" && origin.AbsolutePath == "/" && origin.UserInfo == "" && origin.Query == "" && origin.Fragment == "") {
+        endpoint.Text = new Uri(origin, "/mcp").AbsoluteUri;
+        endpointHint.Text = "Configured address. Start the connection in step 3 before using it in Claude.";
+        copyUrl.Enabled = true;
+      } else {
+        endpoint.Clear(); copyUrl.Enabled = false;
+        endpointHint.Text = tunnel.SelectedIndex == 1 ? "Configure your hostname in step 3 to see its MCP URL." : "Start the connection in step 3 to get your URL.";
+      }
+    }
     async Task SignIn() {
-      Save(); accountState.Text = "Complete sign-in in the opened terminal or browser.";
-      var info = Info(Path.Combine(installRoot, "runtime", "codex", "codex.exe"), "login", false);
-      info.EnvironmentVariables.Remove("CODEX_MCP_PASSWORD"); info.EnvironmentVariables.Remove("CODEX_MCP_TUNNEL_TOKEN");
-      info.CreateNoWindow = false;
+      if (server != null && !server.HasExited) throw new Exception("Stop the connection before changing the OpenAI account.");
+      accountState.Text = "Complete sign-in in the opened terminal or browser.";
+      Store.EnsurePrivateRoot();
+      var info = AccountStatus.Info(Path.Combine(installRoot, "runtime", "codex", "codex.exe"), Path.Combine(Store.Root, "codex-home"), false);
       using (var process = Process.Start(info)) {
         await Task.Run(() => process.WaitForExit());
         if (process.ExitCode != 0) throw new Exception("Codex sign-in did not finish. Select Sign in to Codex to try again.");
       }
-      accountState.Text = "Codex sign-in completed. Continue to Connection."; accountState.ForeColor = Color.FromArgb(25, 116, 85);
+      await RefreshAccount();
       Write("Codex sign-in completed.");
     }
     void ConnectionStatus(string message, bool connected = false) {
+      endpointConnected = connected;
       state.Text = message; state.ForeColor = connected ? Color.FromArgb(25, 116, 85) : Muted;
       state.AccessibleName = "Connection status: " + message;
       if (trayStatus != null) trayStatus.Text = message;
-      if (!connected) { endpoint.Clear(); copyUrl.Enabled = false; }
+      if (!connected) UpdateEndpointPreview();
+      else endpointHint.Text = "Connection running. Copy this URL into Claude.";
     }
     void DetectEndpoint(string text) {
       if (!text.StartsWith("codex-local-mcp ready: ", StringComparison.Ordinal)) return;

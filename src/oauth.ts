@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthClientInformationFull, OAuthTokens, OAuthTokenRevocationRequest } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { InvalidGrantError, InvalidTokenError, InvalidRequestError, InvalidScopeError, TooManyRequestsError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { sendLoginPage } from "./login-page.js";
 
 const random = () => randomBytes(32).toString("base64url");
 const seconds = () => Math.floor(Date.now() / 1000);
@@ -28,10 +29,9 @@ class ExpiringStore<T> {
 }
 
 type Grant = { clientId: string; params: AuthorizationParams };
-type Pending = Grant & { browser: string };
+type Pending = Grant & { browser: string; clientName: string };
 type Family = { clientId: string; expiresAt: number; revoked: boolean };
 type Token = { family: Family; expiresAt: number; used?: boolean };
-const escapeHtml = (value: string) => value.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 /** A single-owner OAuth provider. OpenAI credentials never enter this protocol. */
 export class OwnerOAuthProvider implements OAuthServerProvider {
@@ -76,18 +76,12 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
     if (!/^[A-Za-z0-9_-]{43}$/.test(params.codeChallenge)) throw new InvalidRequestError("Invalid S256 challenge.");
     const id = random();
     const browser = random();
-    this.pending.set(id, { clientId: client.client_id, params, browser }, 300);
+    this.pending.set(id, { clientId: client.client_id, params, browser, clientName: client.client_name || client.client_id }, 600);
     // Separate cookies prevent another connector tab from replacing this request's browser binding.
     res.cookie(`codex_oauth_${id}`, browser, {
-      httpOnly: true, secure: this.resource.protocol === "https:", sameSite: "lax", path: "/login", maxAge: 300_000,
+      httpOnly: true, secure: this.resource.protocol === "https:", sameSite: "lax", path: "/", maxAge: 600_000,
     });
-    res.type("html").send(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Connect Codex MCP</title>
-<h1>Connect Codex MCP</h1><p>This client can run Codex tasks and read files in the shared workspace root.</p>
-<p>Client: ${escapeHtml(client.client_name || client.client_id)}</p><p>Callback: ${escapeHtml(params.redirectUri)}</p>
-<form method="post" action="/login"><input type="hidden" name="request_id" value="${id}">
-<p><label>Username <input name="username" autocomplete="username" required></label></p>
-<p><label>Password <input name="password" type="password" autocomplete="current-password" required maxlength="1024"></label></p>
-<button type="submit">Sign in and allow access</button></form></html>`);
+    sendLoginPage(res, { id, client: client.client_name || client.client_id, callback: params.redirectUri });
   }
 
   async login(req: Request, res: Response): Promise<void> {
@@ -96,26 +90,33 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
     const cookieName = `codex_oauth_${id}=`;
     const cookie = req.headers.cookie?.split(";").map(v => v.trim()).find(v => v.startsWith(cookieName))?.slice(cookieName.length);
     if (!pending || cookie !== pending.browser || (req.headers.origin && req.headers.origin !== this.resource.origin)) {
-      res.status(400).send("Login request is invalid or expired. Start the connection again.");
+      console.error("MCP sign-in rejected: " + (!pending ? "request expired or server restarted." : cookie !== pending.browser ? "browser cookie missing or mismatched." : "untrusted browser origin."));
+      sendLoginPage(res.status(400), { error: pending && cookie !== pending.browser ? "browser" : "expired" });
       return;
     }
-    // Consume on every attempt. A failed attempt needs a new browser authorization request.
-    this.pending.delete(id);
+    // Keep browser-bound requests available after a typing error. Rate limits still apply.
+    const invalidCredentials = () => sendLoginPage(res.status(401), {
+      id, client: pending.clientName, callback: pending.params.redirectUri,
+      notice: "The MCP username or password did not match. Check the saved login in the app and try again.",
+    });
     const password = typeof req.body.password === "string" ? req.body.password : "";
-    if (Buffer.byteLength(password) > 1024) { res.status(401).send("Invalid login."); return; }
+    if (Buffer.byteLength(password) > 1024) { invalidCredentials(); return; }
     const hash = await new Promise<Buffer>((resolve, reject) => {
       scrypt(password, this.salt, 64, (error, result) => error ? reject(error) : resolve(result));
     });
     if (!timingSafeEqual(hash, this.passwordHash) || req.body.username !== this.username) {
-      res.status(401).send("Invalid login. Start the connection again.");
+      invalidCredentials();
       return;
     }
+    // Concurrent valid submissions must not issue two authorization codes.
+    if (this.pending.get(id) !== pending) { sendLoginPage(res.status(400), { error: "expired" }); return; }
+    this.pending.delete(id);
     const code = random();
     this.codes.set(code, pending, 60);
     const callback = new URL(pending.params.redirectUri);
     callback.searchParams.set("code", code);
     if (pending.params.state !== undefined) callback.searchParams.set("state", pending.params.state);
-    res.clearCookie(`codex_oauth_${id}`, { path: "/login", secure: this.resource.protocol === "https:", sameSite: "lax", httpOnly: true });
+    res.clearCookie(`codex_oauth_${id}`, { path: "/", secure: this.resource.protocol === "https:", sameSite: "lax", httpOnly: true });
     res.redirect(303, callback.href);
   }
 
