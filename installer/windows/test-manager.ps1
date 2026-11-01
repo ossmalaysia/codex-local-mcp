@@ -45,7 +45,7 @@ try {
   Call 'DetectEndpoint' @('codex-local-mcp ready: https://example.invalid/mcp (OAuth login required)')
   Assert ((Field 'endpoint').Text -eq 'https://example.invalid/mcp') 'Ready URL was not extracted'
   Assert ((Field 'copyUrl').Enabled) 'Ready URL must be available to copy'
-  Assert ((Field 'currentStep') -eq 3) 'Ready connection must show Claude instructions'
+  Assert ((Field 'currentStep') -eq 4) 'Ready connection must show live activity'
   Call 'ConnectionStatus' @('Not connected', $false)
   Assert ((Field 'endpoint').Text -eq '' -and !(Field 'copyUrl').Enabled) 'Stopped connections must clear stale URLs'
   # Redaction test uses only synthetic in-memory settings. No settings are saved.

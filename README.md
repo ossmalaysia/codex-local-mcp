@@ -105,6 +105,12 @@ For that manual option, configure the hostname route to `http://127.0.0.1:<your 
 Cloudflare account credentials use Windows DPAPI encryption. They stay in the manager and do not reach Codex or the MCP server.
 The Accounts page shows the saved OpenAI account email when available and marks an existing MCP password as saved.
 The Claude guide shows a configured custom MCP URL before startup and states whether the connection is running.
+
+After startup, the app opens **Activity**. This page shows incoming MCP requests and each task's status, elapsed time, workspace, and file count.
+Running tasks send progress updates every five seconds. Command execution, file writes, completion, failure, and timeout states appear separately.
+Select a task and use **Open workspace** to inspect its files. The tray menu also has **Live activity**.
+Activity stays in memory for the current app session. Stopping the connection marks unfinished tasks as interrupted.
+The view uses fixed progress messages. It does not copy request prompts, command text, credentials, or image Base64 data into the activity list.
 Passwords and tunnel tokens use Windows DPAPI encryption for the current user.
 Settings and Codex login files are stored under `%LOCALAPPDATA%\CodexLocalMCPData`.
 The workspace must be separate from that folder and the installation folder.

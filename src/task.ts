@@ -2,12 +2,14 @@ import { config } from "./config.js";
 import { runCodex } from "./codex.js";
 import { collectArtifacts, type ArtifactReport } from "./artifacts.js";
 import { changedFiles, ensureWorkspace, resolveWorkspace, snapshot } from "./workspace.js";
+import type { TaskProgress } from "./activity.js";
 
 export interface TaskInput {
   prompt: string;
   workspace?: string;
   timeout_sec?: number;
   model?: string;
+  onProgress?: (progress: TaskProgress) => void;
 }
 
 export interface TaskResult {
@@ -63,18 +65,23 @@ export async function executeTask(input: TaskInput): Promise<TaskResult> {
   const workspace = resolveWorkspace(input.workspace);
 
   return withWorkspaceLock(workspace.toLowerCase(), async () => {
+    input.onProgress?.({ phase: "preparing" });
     const real = await ensureWorkspace(workspace);
 
     const before = await snapshot(real);
+    input.onProgress?.({ phase: "running" });
     const run = await runCodex({
       prompt: input.prompt,
       cwd: real,
       timeoutSec: clampTimeout(input.timeout_sec),
       model: input.model,
+      onProgress: phase => input.onProgress?.({ phase }),
     });
+    input.onProgress?.({ phase: "collecting_files", exitCode: run.exitCode, timedOut: run.timedOut });
     const after = await snapshot(real);
 
     const artifacts = await collectArtifacts(real, changedFiles(before, after));
+    input.onProgress?.({ phase: "collecting_files", files: artifacts.files.length });
 
     const parts = [run.stdout.trim(), run.stderr.trim() ? `[stderr]\n${run.stderr.trim()}` : ""];
     return {

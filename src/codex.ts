@@ -2,12 +2,14 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { config } from "./config.js";
 import { sandboxArguments } from "./sandbox.js";
+import { CodexProgress, type TaskPhase } from "./activity.js";
 
 export interface RunOptions {
   prompt: string;
   cwd: string;
   timeoutSec: number;
   model?: string;
+  onProgress?: (phase: TaskPhase) => void;
 }
 
 export interface RunResult {
@@ -126,7 +128,7 @@ export function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: merged, Path: merged };
   // Remote login credentials must never reach generated code or CLI subprocesses.
   for (const key of Object.keys(env)) {
-    if (/^(CODEX_MCP_PASSWORD|CODEX_MCP_TUNNEL_TOKEN|TUNNEL_TOKEN)/i.test(key)) delete env[key];
+    if (/^(CODEX_MCP_PASSWORD|CODEX_MCP_TUNNEL_TOKEN|CODEX_MCP_ACTIVITY|TUNNEL_TOKEN)/i.test(key)) delete env[key];
   }
   return env;
 }
@@ -226,6 +228,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
 
     const stdout = new BoundedBuffer(config.maxOutputChars);
     const stderr = new BoundedBuffer(config.maxOutputChars);
+    const progress = new CodexProgress(phase => opts.onProgress?.(phase));
     let timedOut = false;
     let settled = false;
     let reaper: NodeJS.Timeout | undefined;
@@ -256,7 +259,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
     }, opts.timeoutSec * 1000);
 
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk.toString("utf8")));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => { const text = chunk.toString("utf8"); stderr.push(text); progress.push(text); });
 
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (settled) return;

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
+import { emitActivity, type TaskProgress } from "./activity.js";
 
 /**
  * Long-running work detached from the tool call that started it.
@@ -23,6 +24,7 @@ export interface Job<T> {
   startedAt: number;
   finishedAt?: number;
   outcome?: Outcome<T>;
+  progress?: TaskProgress;
   /** Settles when the job finishes, whether it succeeded or failed. Never rejects. */
   done: Promise<void>;
 }
@@ -45,7 +47,15 @@ function purgeExpired(now = Date.now()): void {
   }
 }
 
-export function startJob<T>(label: string, workspace: string, work: () => Promise<T>): Job<T> {
+export function reportJob(job: Job<unknown>, progress: TaskProgress): void {
+  job.progress = { ...job.progress, ...progress };
+  const failed = job.outcome && (!job.outcome.ok || Boolean((job.outcome.value as { isError?: boolean } | null)?.isError));
+  emitActivity({ type: "job", id: job.id, action: job.label, workspace: job.workspace,
+    status: job.outcome ? failed ? "failed" : "completed" : "running",
+    ...job.progress, elapsedMs: (job.finishedAt ?? Date.now()) - job.startedAt });
+}
+
+export function startJob<T>(label: string, workspace: string, work: (job: Job<T>) => Promise<T>): Job<T> {
   purgeExpired();
   const running = runningCount();
   if (running >= config.maxRunningJobs) {
@@ -64,7 +74,7 @@ export function startJob<T>(label: string, workspace: string, work: () => Promis
   };
   // Promise.resolve().then() also captures a synchronous throw from work().
   job.done = Promise.resolve()
-    .then(work)
+    .then(() => work(job))
     .then(
       (value) => {
         job.outcome = { ok: true, value };
@@ -75,9 +85,14 @@ export function startJob<T>(label: string, workspace: string, work: () => Promis
     )
     .finally(() => {
       job.finishedAt = Date.now();
+      clearInterval(heartbeat);
+      reportJob(job, job.progress ?? { phase: "running" });
     });
 
   jobs.set(job.id, job as Job<unknown>);
+  reportJob(job, { phase: "queued" });
+  const heartbeat = setInterval(() => reportJob(job, job.progress ?? { phase: "running" }), 5000);
+  heartbeat.unref();
   return job;
 }
 
