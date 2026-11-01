@@ -56,8 +56,42 @@ function bind(id: string, work: () => Promise<void>) {
   const button = $<HTMLButtonElement>(id);
   button.addEventListener("click", () => void action(button, work));
 }
+const executionFields: Record<string, string> = {
+  "task-model": "model",
+  "task-reasoning": "reasoning_effort",
+  "task-timeout": "timeout_sec",
+  "image-count": "count",
+  "image-size": "size",
+  "image-quality": "quality",
+  "image-format": "output_format",
+  "image-compression": "output_compression",
+  "image-background": "background",
+  "image-budget": "target_file_kb",
+};
+const executionDefaults: Json = {
+  model: "",
+  reasoning_effort: "default",
+  timeout_sec: 300,
+  count: 1,
+  size: "1024x1024",
+  quality: "low",
+  output_format: "jpeg",
+  output_compression: 80,
+  background: "opaque",
+  target_file_kb: 256,
+};
+function executionData() {
+  return Object.fromEntries(
+    Object.entries(executionFields).map(([id, key]) => [
+      key,
+      input(id).type === "number" ? Number(input(id).value) : input(id).value,
+    ]),
+  );
+}
 function apply(s: Json) {
   settings = s;
+  for (const [id, key] of Object.entries(executionFields))
+    input(id).value = String(s.execution?.[key] ?? executionDefaults[key]);
   for (const [id, key] of Object.entries({
     folder: "workspace",
     username: "username",
@@ -89,6 +123,7 @@ function tunnelView() {
 }
 function data() {
   return {
+    execution: executionData(),
     workspace: input("folder").value,
     username: input("username").value,
     password: input("password").value,
@@ -146,42 +181,125 @@ function render(connection: Json) {
       "No tasks yet. Send a Codex request from Claude to see its progress.";
     container.append(empty);
   }
-  for (const task of tasks) {
-    const card = document.createElement("article");
-    card.className = "card";
-    const heading = document.createElement("div");
-    heading.className = "card-head";
-    const title = document.createElement("h2");
-    title.textContent =
-      task.action === "codex_generate_image" ? "Generate image" : "Codex task";
-    const status = document.createElement("span");
-    status.className = "badge";
-    status.textContent = task.status ?? "running";
-    heading.append(title, status);
-    const phase = document.createElement("p");
-    phase.textContent =
-      (
-        {
-          queued: "Waiting for a task slot",
-          preparing: "Preparing the workspace",
-          running: "Codex is working",
-          running_command: "Running a command",
-          writing_files: "Writing files",
-          collecting_files: "Collecting output files",
-        } as Record<string, string>
-      )[task.phase] ?? "Waiting for progress";
-    const path = document.createElement("p");
-    path.className = "task-path";
-    path.textContent = task.workspace ?? "";
-    const time = document.createElement("p");
-    time.className = "hint task-time";
-    time.textContent =
-      task.elapsedMs !== undefined
-        ? `Elapsed: ${Math.floor(task.elapsedMs / 1000)} seconds`
-        : "";
-    card.append(heading, phase, path, time);
-    container.append(card);
+  for (const task of tasks) container.append(taskCard(task));
+}
+const phaseNames: Record<string, string> = {
+  queued: "Waiting for the workspace",
+  preparing: "Preparing the workspace",
+  running: "Waiting for Codex",
+  running_command: "Running a command",
+  writing_files: "Saving files",
+  collecting_files: "Collecting output files",
+  generating_image: "Generating the image",
+  thinking: "Planning the next step",
+  searching: "Searching the web",
+  using_tool: "Using a tool",
+};
+function line(text: string, className = "") {
+  const p = document.createElement("p");
+  p.textContent = text;
+  p.className = className;
+  return p;
+}
+function taskParameters(task: Json) {
+  const opts = task.options ?? {};
+  const params = [
+    `Model: ${opts.model || "Codex default"}`,
+    `Reasoning: ${opts.reasoning_effort || "default"}`,
+    `Timeout: ${opts.timeout_sec ?? 300}s`,
+  ];
+  if (task.action === "codex_generate_image")
+    params.push(
+      `${opts.count ?? 1} image(s) · ${opts.size ?? "1024x1024"}`,
+      `Generation: ${opts.quality ?? "low"}`,
+      `File: ${opts.output_format ?? "jpeg"} · quality ${opts.output_compression ?? 80}`,
+      `Background: ${opts.background ?? "opaque"}`,
+      `Target: ${opts.target_file_kb ?? 256} KB`,
+    );
+  const chips = document.createElement("div");
+  chips.className = "task-params";
+  for (const value of params) {
+    const chip = document.createElement("span");
+    chip.textContent = value;
+    chips.append(chip);
   }
+  return chips;
+}
+function taskPhase(task: Json) {
+  if (task.status === "completed") return "Task completed";
+  if (task.status === "failed") return "Task failed";
+  return phaseNames[task.phase] ?? "Waiting for progress";
+}
+function taskCard(task: Json) {
+  const card = document.createElement("article");
+  card.className = "card";
+  const heading = document.createElement("div");
+  heading.className = "card-head";
+  const title = document.createElement("h2");
+  title.textContent =
+    task.action === "codex_generate_image" ? "Generate image" : "Codex task";
+  const status = document.createElement("span");
+  status.className = "badge";
+  status.textContent = task.status ?? "running";
+  heading.append(title, status);
+  const elapsed = Math.floor((task.elapsedMs ?? 0) / 1000),
+    idle = Math.floor((task.idleMs ?? 0) / 1000);
+  const phase = taskPhase(task);
+  card.append(
+    heading,
+    line(phase, "task-stage"),
+    line(
+      `Elapsed: ${elapsed} seconds · ${task.steps ?? 0} events completed`,
+      "hint task-time",
+    ),
+  );
+  if (task.status === "running")
+    card.append(
+      line(
+        `Last Codex event: ${idle} seconds ago. ${idle >= 30 ? "No new event yet; the task is still running." : "Progress updates come from Codex events."}`,
+        "hint",
+      ),
+    );
+  card.append(taskParameters(task));
+  const history = document.createElement("ol");
+  history.className = "task-history";
+  history.setAttribute("aria-label", "Task stages");
+  for (const event of (task.history ?? []).slice(-8)) {
+    const li = document.createElement("li");
+    li.textContent = `${Math.floor(event.atMs / 1000)}s · ${phaseNames[event.phase] ?? "Codex event"}`;
+    history.append(li);
+  }
+  if (history.childElementCount) card.append(history);
+  if (task.files !== undefined)
+    card.append(
+      line(
+        `Output files: ${task.files} · Exit code: ${task.exitCode ?? "unavailable"}`,
+        "hint",
+      ),
+    );
+  if (task.outputFiles?.length)
+    for (const file of task.outputFiles) {
+      const dimensions = file.width
+        ? " · " + file.width + "×" + file.height
+        : "";
+      card.append(
+        line(
+          `${file.name} · ${(file.bytes / 1024).toFixed(1)} KB${dimensions}`,
+          "hint",
+        ),
+      );
+    }
+  if (task.usage?.output_tokens !== undefined)
+    card.append(
+      line(
+        `Tokens: ${task.usage.input_tokens ?? 0} input · ${task.usage.output_tokens} output`,
+        "hint",
+      ),
+    );
+  card.append(
+    line(String(task.workspace ?? "").replace(/^\\\\\?\\/, ""), "task-path"),
+  );
+  return card;
 }
 async function refresh() {
   try {

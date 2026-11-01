@@ -24,6 +24,19 @@
             "description": "Override the Codex model for this run.",
             "type": "string"
           },
+          "reasoning_effort": {
+            "description": "Model reasoning effort. Supported values depend on the model.",
+            "type": "string",
+            "enum": [
+              "default",
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "wait_sec": {
             "description": "Seconds to wait for the result before returning a job_id instead. Default 45, maximum 50, which keeps the call under common 60-second client timeouts.",
             "type": "number"
@@ -69,6 +82,53 @@
               "high",
               "auto"
             ]
+          },
+          "model": {
+            "description": "Override the Codex model for this image task.",
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "description": "Codex reasoning effort, subject to model support.",
+            "type": "string",
+            "enum": [
+              "default",
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "output_format": {
+            "description": "Requested saved format. Default JPEG for smaller opaque images.",
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp"
+            ]
+          },
+          "output_compression": {
+            "description": "Requested JPEG or WebP output quality, 1 to 100. Default 80. PNG is lossless.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "background": {
+            "description": "Requested image background. Use PNG or WebP for transparency.",
+            "type": "string",
+            "enum": [
+              "opaque",
+              "transparent",
+              "auto"
+            ]
+          },
+          "target_file_kb": {
+            "description": "Target KB per image, default 256. A prompt preference; actual size is reported.",
+            "type": "integer",
+            "minimum": 16,
+            "maximum": 10240
           },
           "workspace": {
             "description": "Workspace folder name. Defaults to a new folder.",

@@ -67,6 +67,74 @@
             Leave this off unless your task needs network access.
           </p>
           <button id="sandbox-check">Check sandbox</button>
+
+          <hr />
+          <details>
+            <summary>Task and image settings</summary>
+            <p class="hint">
+              Defaults for new tasks. Claude can override them for each request.
+              Restart the connection after saving.
+            </p>
+            <label for="task-model">Codex model</label
+            ><input
+              id="task-model"
+              maxlength="128"
+              placeholder="Use the Codex default"
+            />
+            <label for="task-reasoning">Reasoning effort</label
+            ><select id="task-reasoning">
+              <option value="default">Model default</option>
+              <option value="none">None</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+            </select>
+            <p class="hint">
+              Available efforts depend on the selected model. Higher effort can
+              take longer.
+            </p>
+            <label for="task-timeout">Task timeout (seconds)</label
+            ><input id="task-timeout" type="number" min="1" max="1800" />
+            <label for="image-count">Image count</label
+            ><input id="image-count" type="number" min="1" max="10" />
+            <label for="image-size">Image dimensions</label
+            ><input id="image-size" placeholder="1024x1024 or auto" />
+            <label for="image-quality">Generation quality</label
+            ><select id="image-quality">
+              <option value="low">Low · faster drafts</option>
+              <option value="medium">Medium</option>
+              <option value="high">High · final assets</option>
+              <option value="auto">Auto</option>
+            </select>
+            <label for="image-format">File format</label
+            ><select id="image-format">
+              <option value="jpeg">JPEG · smaller opaque images</option>
+              <option value="png">PNG · lossless, supports transparency</option>
+              <option value="webp">
+                WebP · compact, supports transparency
+              </option>
+            </select>
+            <label for="image-compression">Output quality (1–100)</label
+            ><input id="image-compression" type="number" min="1" max="100" />
+            <p class="hint">
+              Lower values make smaller JPEG files. The native service saves PNG
+              and WebP losslessly.
+            </p>
+            <label for="image-background">Background</label
+            ><select id="image-background">
+              <option value="opaque">Opaque</option>
+              <option value="transparent">Transparent · PNG or WebP</option>
+              <option value="auto">Auto</option>
+            </select>
+            <label for="image-budget">Target file size (KB per image)</label
+            ><input id="image-budget" type="number" min="16" max="10240" />
+            <p class="hint">
+              The prompt requests this size. Actual file size depends on the
+              image and available tools.
+            </p>
+          </details>
         </div>
         <div class="footer">
           <button class="primary" data-next="accounts">
@@ -237,8 +305,8 @@
         </div>
         <div id="tasks"></div>
         <p class="hint">
-          Activity shows task status and workspace paths. Prompts, credentials,
-          and task output stay out of this view.
+          Activity shows stages, elapsed time, task settings, and workspace
+          paths. Prompts, credentials, and task output stay out of this view.
         </p>
       </section>
     </main>

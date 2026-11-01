@@ -75,6 +75,10 @@ pub fn configure(cmd: &mut Command, install: &Path, settings: &Settings) -> Resu
         .env("CODEX_PRIVATE_ROOT", secure::root()?)
         .env("CODEX_MCP_TRANSPORT", "http")
         .env("CODEX_MCP_ACTIVITY", "1")
+        .env(
+            "CODEX_TASK_DEFAULTS",
+            serde_json::to_string(&settings.execution)?,
+        )
         .env("CODEX_MCP_HOST", "127.0.0.1")
         .env("CODEX_MCP_PORT", settings.port.to_string())
         .env("CODEX_MCP_USERNAME", &settings.username)

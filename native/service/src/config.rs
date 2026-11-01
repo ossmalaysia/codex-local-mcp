@@ -25,6 +25,7 @@ pub struct Config {
     pub response: usize,
     pub files: usize,
     pub activity: bool,
+    pub defaults: crate::task_options::TaskOptions,
 }
 
 pub fn value(key: &str, default: &str) -> String {
@@ -87,7 +88,11 @@ impl Config {
             value("CODEX_MCP_APP_VIEW", "false") != "true",
             "MCP App view is not yet supported by the native service; use the TypeScript service"
         );
+        let defaults: crate::task_options::TaskOptions =
+            serde_json::from_str(&value("CODEX_TASK_DEFAULTS", "{}"))?;
+        defaults.validate()?;
         Ok(Self {
+            defaults,
             root,
             bin,
             mode,

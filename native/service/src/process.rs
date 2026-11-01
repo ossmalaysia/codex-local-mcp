@@ -1,5 +1,9 @@
-use crate::{activity::Marker, config::Config};
+use crate::{
+    activity::{Events, Marker},
+    config::Config,
+};
 use anyhow::{Result, ensure};
+use serde_json::Value;
 use std::{
     path::Path,
     process::Stdio,
@@ -18,6 +22,7 @@ pub struct Output {
     pub code: Option<i32>,
     pub timed_out: bool,
     pub duration: u128,
+    pub thread: Option<String>,
 }
 
 pub fn command(bin: &Path) -> Command {
@@ -98,13 +103,14 @@ pub async fn run(
     workspace: &Path,
     prompt: String,
     timeout: u64,
-    model: &str,
+    options: &crate::task_options::TaskOptions,
     cancel: CancellationToken,
-    report: Arc<dyn Fn(&'static str) + Send + Sync>,
+    report: Arc<dyn Fn(Value) + Send + Sync>,
 ) -> Result<Output> {
     ensure!(
-        model.len() <= 128
-            && model
+        options.model.len() <= 128
+            && options
+                .model
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b)),
         "Invalid model name"
@@ -116,8 +122,15 @@ pub async fn run(
         .arg(workspace)
         .args(config.sandbox_args())
         .arg("--skip-git-repo-check");
-    if !model.is_empty() {
-        cmd.args(["--model", model]);
+    cmd.arg("--json");
+    if !options.model.is_empty() {
+        cmd.args(["--model", &options.model]);
+    }
+    if options.reasoning_effort != "default" {
+        cmd.args([
+            "-c",
+            &format!("model_reasoning_effort={}", options.reasoning_effort),
+        ]);
     }
     cmd.arg("-")
         .current_dir(config.bin.parent().unwrap())
@@ -126,7 +139,11 @@ pub async fn run(
         .stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
     let tree = Tree::attach(&child)?;
-    let stdout = tokio::spawn(capture(child.stdout.take().unwrap(), config.output, None));
+    let stdout = tokio::spawn(capture_events(
+        child.stdout.take().unwrap(),
+        config.output,
+        report.clone(),
+    ));
     let stderr = tokio::spawn(capture(
         child.stderr.take().unwrap(),
         config.output,
@@ -149,20 +166,22 @@ pub async fn run(
     let _ = child.kill().await;
     writer.abort();
     let collect = async { Ok::<_, anyhow::Error>((stdout.await??, stderr.await??)) };
-    let (stdout, stderr) = tokio::time::timeout(Duration::from_secs(5), collect).await??;
+    let ((stdout, thread), stderr) =
+        tokio::time::timeout(Duration::from_secs(5), collect).await??;
     Ok(Output {
         stdout,
         stderr,
         code,
         timed_out,
         duration: started.elapsed().as_millis(),
+        thread,
     })
 }
 
 async fn capture(
     mut stream: impl AsyncRead + Unpin,
     max: usize,
-    report: Option<Arc<dyn Fn(&'static str) + Send + Sync>>,
+    report: Option<Arc<dyn Fn(Value) + Send + Sync>>,
 ) -> Result<String> {
     let mut head = Vec::new();
     let mut tail = std::collections::VecDeque::new();
@@ -175,7 +194,9 @@ async fn capture(
             break;
         }
         if let Some(ref callback) = report {
-            marker.push(&chunk[..n], |phase| callback(phase));
+            marker.push(&chunk[..n], |phase| {
+                callback(serde_json::json!({"legacyPhase":phase}))
+            });
         }
         for b in &chunk[..n] {
             if head.len() < max / 2 {
@@ -199,6 +220,46 @@ async fn capture(
         String::from_utf8_lossy(&head),
         String::from_utf8_lossy(tail.make_contiguous())
     ))
+}
+
+async fn capture_events(
+    mut stream: impl AsyncRead + Unpin,
+    max: usize,
+    report: Arc<dyn Fn(Value) + Send + Sync>,
+) -> Result<(String, Option<String>)> {
+    let mut events = Events::default();
+    let mut output = String::new();
+    let mut thread = None;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        events.push(&chunk[..n], |event| {
+            if event["type"] == "thread.started" {
+                thread = event["thread_id"]
+                    .as_str()
+                    .filter(|s| uuid::Uuid::parse_str(s).is_ok())
+                    .map(str::to_owned);
+            }
+            if event["type"] == "item.completed"
+                && event["item"]["type"] == "agent_message"
+                && let Some(text) = event["item"]["text"].as_str()
+            {
+                output = text.chars().take(max).collect();
+            }
+            if (event["type"] == "error" || event["type"] == "turn.failed")
+                && let Some(message) = event["message"]
+                    .as_str()
+                    .or_else(|| event["error"]["message"].as_str())
+            {
+                output = message.chars().take(max).collect();
+            }
+            report(event);
+        });
+    }
+    Ok((output, thread))
 }
 
 // The handle owns the entire child tree. Closing it kills remaining descendants.

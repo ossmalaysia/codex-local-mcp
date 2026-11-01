@@ -24,7 +24,11 @@ fn main() {
     let dir = PathBuf::from(&args[index + 1]);
     let mut prompt = String::new();
     std::io::stdin().read_to_string(&mut prompt).unwrap();
-    eprintln!("exec");
+    assert!(args.iter().any(|a| a == "--json"));
+    println!(
+        "{}",
+        serde_json::json!({"type":"item.started","item":{"id":"one","type":"command_execution","command":"private-command-sentinel","status":"in_progress"}})
+    );
     if prompt.contains("FAKE_TIMEOUT") {
         std::thread::sleep(std::time::Duration::from_secs(10));
     }
@@ -42,6 +46,24 @@ fn main() {
     } else {
         std::fs::write(dir.join("result.txt"), "native fixture output").unwrap();
     }
-    eprintln!("apply patch");
-    println!("Native fixture completed");
+    println!(
+        "{}",
+        serde_json::json!({"type":"item.completed","item":{"id":"one","type":"command_execution","status":"completed"}})
+    );
+    println!(
+        "{}",
+        serde_json::json!({"type":"item.started","item":{"id":"two","type":"file_change"}})
+    );
+    println!(
+        "{}",
+        serde_json::json!({"type":"item.completed","item":{"id":"two","type":"file_change"}})
+    );
+    println!(
+        "{}",
+        serde_json::json!({"type":"item.completed","item":{"id":"three","type":"agent_message","text":"Native fixture completed"}})
+    );
+    println!(
+        "{}",
+        serde_json::json!({"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}})
+    );
 }

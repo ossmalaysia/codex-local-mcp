@@ -1,7 +1,12 @@
 import { config } from "./config.js";
 import { runCodex } from "./codex.js";
 import { collectArtifacts, type ArtifactReport } from "./artifacts.js";
-import { changedFiles, ensureWorkspace, resolveWorkspace, snapshot } from "./workspace.js";
+import {
+  changedFiles,
+  ensureWorkspace,
+  resolveWorkspace,
+  snapshot,
+} from "./workspace.js";
 import type { TaskProgress } from "./activity.js";
 
 export interface TaskInput {
@@ -9,6 +14,7 @@ export interface TaskInput {
   workspace?: string;
   timeout_sec?: number;
   model?: string;
+  reasoning_effort?: string;
   onProgress?: (progress: TaskProgress) => void;
 }
 
@@ -29,7 +35,9 @@ export interface TaskResult {
  */
 export function clampTimeout(requested?: number): number {
   const chosen =
-    requested && Number.isFinite(requested) && requested > 0 ? requested : config.defaultTimeoutSec;
+    requested && Number.isFinite(requested) && requested > 0
+      ? requested
+      : config.defaultTimeoutSec;
   // setTimeout silently fires immediately above 2^31-1 ms.
   const ceiling = Math.min(config.maxTimeoutSec, 2 ** 31 / 1000 - 1);
   return Math.max(1, Math.min(chosen, ceiling));
@@ -75,22 +83,34 @@ export async function executeTask(input: TaskInput): Promise<TaskResult> {
       cwd: real,
       timeoutSec: clampTimeout(input.timeout_sec),
       model: input.model,
-      onProgress: phase => input.onProgress?.({ phase }),
+      reasoningEffort: input.reasoning_effort,
+      onProgress: (phase) => input.onProgress?.({ phase }),
     });
-    input.onProgress?.({ phase: "collecting_files", exitCode: run.exitCode, timedOut: run.timedOut });
+    input.onProgress?.({
+      phase: "collecting_files",
+      exitCode: run.exitCode,
+      timedOut: run.timedOut,
+    });
     const after = await snapshot(real);
 
     const artifacts = await collectArtifacts(real, changedFiles(before, after));
-    input.onProgress?.({ phase: "collecting_files", files: artifacts.files.length });
+    input.onProgress?.({
+      phase: "collecting_files",
+      files: artifacts.files.length,
+    });
 
-    const parts = [run.stdout.trim(), run.stderr.trim() ? `[stderr]\n${run.stderr.trim()}` : ""];
+    const parts = [
+      run.stdout.trim(),
+      run.stderr.trim() ? `[stderr]\n${run.stderr.trim()}` : "",
+    ];
     return {
       workspace: real,
       exitCode: run.exitCode,
       signal: run.signal,
       timedOut: run.timedOut,
       durationMs: run.durationMs,
-      output: parts.filter(Boolean).join("\n\n") || "(codex produced no output)",
+      output:
+        parts.filter(Boolean).join("\n\n") || "(codex produced no output)",
       artifacts,
     };
   });
@@ -147,12 +167,33 @@ export function imagePromptTemplate(
   count: number,
   size?: string,
   quality?: string,
+  options: {
+    output_format?: string;
+    output_compression?: number;
+    background?: string;
+    target_file_kb?: number;
+  } = {},
 ): string {
   const lines = [
-    count > 1 ? `Generate ${count} images: ${description}` : `Generate an image: ${description}`,
+    count > 1
+      ? `Generate ${count} images: ${description}`
+      : `Generate an image: ${description}`,
   ];
   if (size) lines.push(`Size: ${size}.`);
   if (quality) lines.push(`Quality: ${quality}.`);
-  lines.push("Save the image file(s) into ./output/ in the current directory.");
+  const format = options.output_format ?? "jpeg",
+    background = options.background ?? "opaque";
+  if (format === "jpeg" && background === "transparent")
+    throw new Error("Use PNG or WebP for a transparent background");
+  lines.push(
+    `Output format: ${format}.`,
+    `Output compression: ${options.output_compression ?? 80} of 100.`,
+    `Background: ${background}.`,
+    `Target file size: ${options.target_file_kb ?? 256} KB per image.`,
+    "Save the image file(s) into ./output/ in the current directory.",
+    "Use the actual image generation tool. Never invent image bytes. Request the specified dimensions, quality, format, and background. Avoid unnecessary detail or texture when the user's design permits it. Do not upscale smaller images.",
+    "Prefer a returned local file path. If only a data URL is available, retain it in code-mode storage. Use one tools.apply_patch call from JavaScript to write the stored Base64 to a workspace text file, then one PowerShell command to decode it. Do not start a PowerShell process for each Base64 chunk. Do not print Base64 or render generatedImage before saving. If transfer is unavailable, report the limitation.",
+    "Use the requested format and compression. Aim for the target file size without changing dimensions. The target is a preference, not a guarantee. Report actual dimensions and bytes. Do not claim unverified options were applied.",
+  );
   return lines.join("\n");
 }

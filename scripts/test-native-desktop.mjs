@@ -21,7 +21,7 @@ assert.ok(
 const app = path.resolve(
   mode === "legacy"
     ? "artifacts/legacy-upgrade-test-0.5/CodexMCP.exe"
-    : "artifacts/native-desktop-0.7.0/payload/CodexMCP.exe",
+    : "artifacts/native-desktop-0.7.1/payload/CodexMCP.exe",
 );
 const root = await mkdtemp(path.resolve("artifacts/desktop-native-test-"));
 if (mode === "saved") {
@@ -84,7 +84,7 @@ try {
   await page.getByRole("heading", { name: "Choose a place to work" }).waitFor();
   const state = () =>
     page.evaluate(() => window.__TAURI__.core.invoke("state"));
-  assert.equal((await state()).version, "0.7.0");
+  assert.equal((await state()).version, "0.7.1");
   if (mode === "saved") {
     assert.equal((await state()).settings.passwordSaved, true);
     const account = await page.evaluate(() =>
@@ -122,6 +122,20 @@ try {
     false,
     "The running Rust application must not retain the legacy Node runtime",
   );
+  await page.getByRole("button", { name: "1 Workspace" }).click();
+  await page.getByText("Task and image settings", { exact: true }).click();
+  await page.locator("#image-size").fill("512x512");
+  await page.locator("#image-compression").fill("75");
+  await page.locator("#image-budget").fill("128");
+  await page
+    .getByRole("button", { name: "Save and continue →", exact: true })
+    .click();
+  assert.equal((await state()).settings.execution.size, "512x512");
+  assert.equal((await state()).settings.execution.target_file_kb, 128);
+  const persisted = JSON.parse(
+    await readFile(path.join(root, "CodexLocalMCPData/settings.json"), "utf8"),
+  );
+  assert.equal(persisted.Execution.output_compression, 75);
   await page.getByRole("button", { name: "1 Workspace" }).click();
   await page
     .getByRole("button", { name: "Check sandbox", exact: true })

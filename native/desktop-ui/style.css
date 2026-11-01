@@ -316,3 +316,33 @@ li {
 #notice[hidden] {
   display: none;
 }
+
+.task-stage {
+  font-weight: 600;
+  color: #352c83;
+}
+.task-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+.task-params span {
+  background: #f1f0fc;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 12px;
+  color: #49436b;
+}
+.task-history {
+  border-left: 2px solid #dcd7fa;
+  margin: 18px 0;
+  padding-left: 22px;
+  color: #65738a;
+  font-size: 13px;
+  max-height: 220px;
+  overflow: auto;
+}
+.task-history li {
+  padding: 4px 0;
+}

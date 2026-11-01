@@ -1,4 +1,7 @@
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  McpServer,
+  ResourceTemplate,
+} from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -6,7 +9,14 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { config } from "./config.js";
 import { readArtifact, imageMimeType, uriToPath } from "./artifacts.js";
-import { clampWait, getJob, startJob, reportJob, waitForJob, type Job } from "./jobs.js";
+import {
+  clampWait,
+  getJob,
+  startJob,
+  reportJob,
+  waitForJob,
+  type Job,
+} from "./jobs.js";
 import { openInViewer } from "./open.js";
 import {
   executeTask,
@@ -19,7 +29,12 @@ import { resolveWorkspace } from "./workspace.js";
 
 type Content =
   | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string; annotations?: Record<string, unknown> }
+  | {
+      type: "image";
+      data: string;
+      mimeType: string;
+      annotations?: Record<string, unknown>;
+    }
   | {
       type: "resource_link";
       uri: string;
@@ -37,7 +52,10 @@ type ToolResult = {
 
 function errorResult(err: unknown): ToolResult {
   const message = err instanceof Error ? err.message : String(err);
-  return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
+  return {
+    content: [{ type: "text", text: `Error: ${message}` }],
+    isError: true,
+  };
 }
 
 /** Schema for the optional per-call wait, shared by every job-backed tool. */
@@ -81,7 +99,10 @@ async function respondWithJob(
  * and the job can report where its files will appear. Returns the relative name
  * to hand to executeTask, which resolves it to the same directory.
  */
-function prepareWorkspace(name?: string): { workspace: string; relName: string } {
+function prepareWorkspace(name?: string): {
+  workspace: string;
+  relName: string;
+} {
   const workspace = resolveWorkspace(name);
   return { workspace, relName: path.relative(config.root, workspace) };
 }
@@ -118,7 +139,9 @@ function formatTask(result: TaskResult) {
   for (const image of artifacts.images) {
     content.push({
       type: "text",
-      text: image.note ? `Image: ${image.path} (${image.note})` : `Image: ${image.path}`,
+      text: image.note
+        ? `Image: ${image.path} (${image.note})`
+        : `Image: ${image.path}`,
     });
     content.push({
       type: "image",
@@ -148,7 +171,9 @@ function formatTask(result: TaskResult) {
  * semantic-release, and package.json carries a development placeholder between
  * them, so this reports "0.0.0-development" for an untagged checkout.
  */
-const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
+const { version } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
 
 /**
  * The in-chat image view (an MCP App). Hosts that support MCP Apps render this
@@ -158,7 +183,9 @@ const { version } = createRequire(import.meta.url)("../package.json") as { versi
  */
 const IMAGE_VIEW_URI = "ui://codex-local-mcp/image-viewer.html";
 const MCP_APP_MIME = "text/html;profile=mcp-app";
-const IMAGE_VIEW_FILE = fileURLToPath(new URL("../dist/ui/image-viewer.html", import.meta.url));
+const IMAGE_VIEW_FILE = fileURLToPath(
+  new URL("../dist/ui/image-viewer.html", import.meta.url),
+);
 
 /**
  * Build the MCP server with every tool and resource registered, but not yet
@@ -178,7 +205,10 @@ export function createServer(): McpServer {
         "its output plus any files it created. If Codex takes longer than wait_sec, this returns " +
         "status: running and a job_id instead; call codex_job_result with it to collect the result.",
       inputSchema: {
-        prompt: z.string().min(1).describe("The task for Codex, written as you would to a developer."),
+        prompt: z
+          .string()
+          .min(1)
+          .describe("The task for Codex, written as you would to a developer."),
         workspace: z
           .string()
           .optional()
@@ -189,26 +219,50 @@ export function createServer(): McpServer {
         timeout_sec: z
           .number()
           .optional()
-          .describe(`Seconds before Codex is killed. Default ${config.defaultTimeoutSec}.`),
-        model: z.string().optional().describe("Override the Codex model for this run."),
+          .describe(
+            `Seconds before Codex is killed. Default ${config.defaultTimeoutSec}.`,
+          ),
+        model: z
+          .string()
+          .optional()
+          .describe("Override the Codex model for this run."),
+        reasoning_effort: z
+          .enum([
+            "default",
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+          ])
+          .optional()
+          .describe(
+            "Model reasoning effort. Supported values depend on the model.",
+          ),
         wait_sec: waitSecSchema,
       },
     },
     async (args, extra) => {
       try {
         const { workspace, relName } = prepareWorkspace(args.workspace);
-        const job = startJob<ToolResult>("codex_run", workspace, async job =>
+        const job = startJob<ToolResult>("codex_run", workspace, async (job) =>
           formatTask(
             await executeTask({
               prompt: args.prompt,
               workspace: relName,
               timeout_sec: args.timeout_sec,
               model: args.model,
-              onProgress: progress => reportJob(job, progress),
+              reasoning_effort: args.reasoning_effort,
+              onProgress: (progress) => reportJob(job, progress),
             }),
           ),
         );
-        return await respondWithJob(job, clampWait(args.wait_sec), extra.signal);
+        return await respondWithJob(
+          job,
+          clampWait(args.wait_sec),
+          extra.signal,
+        );
       } catch (err) {
         return errorResult(err);
       }
@@ -227,7 +281,13 @@ export function createServer(): McpServer {
         "and a job_id; call codex_job_result with it to collect the images.",
       inputSchema: {
         prompt: z.string().min(1).describe("What the image should depict."),
-        count: z.number().int().min(1).max(10).optional().describe("How many images. Default 1."),
+        count: z
+          .number()
+          .int()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe("How many images. Default 1."),
         size: z
           .string()
           .optional()
@@ -242,8 +302,60 @@ export function createServer(): McpServer {
           .describe(
             'Generation quality. Default "low" - fastest, good for drafts. Use "high" for final assets.',
           ),
-        workspace: z.string().optional().describe("Workspace folder name. Defaults to a new folder."),
-        timeout_sec: z.number().optional().describe("Seconds before Codex is killed."),
+        model: z
+          .string()
+          .optional()
+          .describe("Override the Codex model for this image task."),
+        reasoning_effort: z
+          .enum([
+            "default",
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+          ])
+          .optional()
+          .describe("Codex reasoning effort, subject to model support."),
+        output_format: z
+          .enum(["png", "jpeg", "webp"])
+          .optional()
+          .describe(
+            "Requested saved format. Default JPEG for smaller opaque images.",
+          ),
+        output_compression: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe(
+            "Requested JPEG or WebP output quality, 1 to 100. Default 80. PNG is lossless.",
+          ),
+        background: z
+          .enum(["opaque", "transparent", "auto"])
+          .optional()
+          .describe(
+            "Requested image background. Use PNG or WebP for transparency.",
+          ),
+        target_file_kb: z
+          .number()
+          .int()
+          .min(16)
+          .max(10240)
+          .optional()
+          .describe(
+            "Target KB per image, default 256. A prompt preference; actual size is reported.",
+          ),
+        workspace: z
+          .string()
+          .optional()
+          .describe("Workspace folder name. Defaults to a new folder."),
+        timeout_sec: z
+          .number()
+          .optional()
+          .describe("Seconds before Codex is killed."),
         open: z
           .boolean()
           .optional()
@@ -255,7 +367,9 @@ export function createServer(): McpServer {
       },
       // Links the tool to the in-chat view, only when opted in. See
       // config.mcpAppView for why this is not the default.
-      ...(config.mcpAppView ? { _meta: { ui: { resourceUri: IMAGE_VIEW_URI } } } : {}),
+      ...(config.mcpAppView
+        ? { _meta: { ui: { resourceUri: IMAGE_VIEW_URI } } }
+        : {}),
     },
     async (args, extra) => {
       try {
@@ -264,16 +378,32 @@ export function createServer(): McpServer {
         const requested = parseImageSize(size);
         const { workspace, relName } = prepareWorkspace(args.workspace);
 
-        const job = startJob<ToolResult>("codex_generate_image", workspace, async job => {
-          const result = await executeTask({
-            prompt: imagePromptTemplate(args.prompt, args.count ?? 1, size, args.quality ?? "low"),
-            workspace: relName,
-            timeout_sec: args.timeout_sec,
-            onProgress: progress => reportJob(job, progress),
-          });
-          return finishImages(result, requested, args.open !== false);
-        });
-        return await respondWithJob(job, clampWait(args.wait_sec), extra.signal);
+        const job = startJob<ToolResult>(
+          "codex_generate_image",
+          workspace,
+          async (job) => {
+            const result = await executeTask({
+              prompt: imagePromptTemplate(
+                args.prompt,
+                args.count ?? 1,
+                size,
+                args.quality ?? "low",
+                args,
+              ),
+              workspace: relName,
+              model: args.model,
+              reasoning_effort: args.reasoning_effort,
+              timeout_sec: args.timeout_sec,
+              onProgress: (progress) => reportJob(job, progress),
+            });
+            return finishImages(result, requested, args.open !== false);
+          },
+        );
+        return await respondWithJob(
+          job,
+          clampWait(args.wait_sec),
+          extra.signal,
+        );
       } catch (err) {
         return errorResult(err);
       }
@@ -289,7 +419,12 @@ export function createServer(): McpServer {
         "Waits up to wait_sec for the job to finish; if it is still running, call again. Results " +
         `stay available for ${Math.round(config.jobRetentionSec / 60)} minutes after the job finishes.`,
       inputSchema: {
-        job_id: z.string().min(1).describe("The job_id returned by codex_run or codex_generate_image."),
+        job_id: z
+          .string()
+          .min(1)
+          .describe(
+            "The job_id returned by codex_run or codex_generate_image.",
+          ),
         wait_sec: waitSecSchema,
       },
     },
@@ -301,7 +436,11 @@ export function createServer(): McpServer {
             "Any files it produced are still in its workspace.",
         );
       }
-      return respondWithJob(job as Job<ToolResult>, clampWait(args.wait_sec), extra.signal);
+      return respondWithJob(
+        job as Job<ToolResult>,
+        clampWait(args.wait_sec),
+        extra.signal,
+      );
     },
   );
 
@@ -337,7 +476,9 @@ export function createServer(): McpServer {
       const failures: string[] = [];
       for (const file of result.artifacts.files) {
         if (!imageMimeType(file.path)) continue;
-        const failure = await openInViewer(path.join(result.workspace, file.path));
+        const failure = await openInViewer(
+          path.join(result.workspace, file.path),
+        );
         if (failure) failures.push(failure);
         else opened.push(file.path);
       }
@@ -365,8 +506,13 @@ export function createServer(): McpServer {
         path: z
           .string()
           .min(1)
-          .describe("Path to the file, relative to the workspace root or absolute inside it."),
-        max_bytes: z.number().optional().describe("Refuse files larger than this. Default 5000000."),
+          .describe(
+            "Path to the file, relative to the workspace root or absolute inside it.",
+          ),
+        max_bytes: z
+          .number()
+          .optional()
+          .describe("Refuse files larger than this. Default 5000000."),
       },
     },
     async (args) => {
@@ -376,7 +522,11 @@ export function createServer(): McpServer {
           { type: "text", text: `${file.absPath} (${file.bytes} bytes)` },
         ];
         if (file.base64 && file.mimeType?.startsWith("image/")) {
-          content.push({ type: "image", data: file.base64, mimeType: file.mimeType });
+          content.push({
+            type: "image",
+            data: file.base64,
+            mimeType: file.mimeType,
+          });
         } else if (file.base64) {
           content.push({
             type: "text",
@@ -405,7 +555,8 @@ export function createServer(): McpServer {
       IMAGE_VIEW_URI,
       {
         title: "Codex image viewer",
-        description: "Shows images generated by codex_generate_image inside the chat.",
+        description:
+          "Shows images generated by codex_generate_image inside the chat.",
         mimeType: MCP_APP_MIME,
       },
       async () => {
@@ -417,7 +568,11 @@ export function createServer(): McpServer {
             `The in-chat image view has not been built (${IMAGE_VIEW_FILE}). Run "npm run build".`,
           );
         }
-        return { contents: [{ uri: IMAGE_VIEW_URI, mimeType: MCP_APP_MIME, text: html }] };
+        return {
+          contents: [
+            { uri: IMAGE_VIEW_URI, mimeType: MCP_APP_MIME, text: html },
+          ],
+        };
       },
     );
   }
