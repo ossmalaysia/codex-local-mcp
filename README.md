@@ -66,7 +66,7 @@ After updating, restart the connection and reconnect the connector in Claude. OA
 
 Open **Codex Local MCP** from the Start menu. Then:
 
-1. In **Workspace**, select **Browse…** and choose a dedicated local workspace. Select **Save and continue**.
+1. In **Workspace**, select **Browseâ€¦** and choose a dedicated local workspace. Select **Save and continue**.
 2. In **Accounts**, enter your MCP username. Enter or generate a password, then copy it to your password manager.
 3. Check the OpenAI account status. If needed, select **Sign in to OpenAI**. Select **Save and continue**.
 4. In **Connection**, keep **Quick Tunnel** for the first setup. No Cloudflare account is required.
