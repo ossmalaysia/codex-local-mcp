@@ -347,6 +347,14 @@ void window.__TAURI__.event.listen("update-check", (event) => {
 void window.__TAURI__.event.listen("update-error", (event) =>
   notice(String(event.payload), true),
 );
+void window.__TAURI__.event.listen("update-progress", (event) => {
+  const { received, total } = event.payload;
+  if (Number.isFinite(received) && Number.isFinite(total) && total > 0) {
+    notice(
+      `Downloading update: ${Math.floor((received * 100) / total)}% (${(received / 1048576).toFixed(1)} of ${(total / 1048576).toFixed(1)} MB).`,
+    );
+  }
+});
 async function loadAccount() {
   try {
     await account();

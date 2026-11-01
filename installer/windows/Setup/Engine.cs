@@ -197,6 +197,13 @@ namespace CodexLocalMCP {
         var expected=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs),"Codex Local MCP.lnk");
         if (record.Shortcut==expected) { dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")); dynamic link=shell.CreateShortcut(expected); if ((string)link.TargetPath==Path.Combine(directory,"CodexMCP.exe")) File.Delete(expected); }
       }
+      const string notificationKey = @"Software\Classes\AppUserModelId\com.ossmalaysia.codex-local-mcp";
+      using (var key = Registry.CurrentUser.OpenSubKey(notificationKey)) {
+        if (string.Equals(key?.GetValue("ApplicationPath") as string, Path.Combine(directory,"CodexMCP.exe"), StringComparison.OrdinalIgnoreCase)) {
+          key.Close();
+          try { Registry.CurrentUser.DeleteSubKey(notificationKey, false); } catch (IOException) { /* Preserve unexpected subkeys. */ }
+        }
+      }
       Registry.CurrentUser.DeleteSubKeyTree(record.RegistryKey,false);
       using (var key=Registry.CurrentUser.OpenSubKey(AppKey)) if ((string)key?.GetValue("InstallLocation")==directory) Registry.CurrentUser.DeleteSubKeyTree(AppKey,false);
       File.Delete(full); progress?.Report(Tuple.Create(100,"Uninstall complete. Your settings and workspace files were kept."));

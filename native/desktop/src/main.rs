@@ -1,4 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#[cfg(windows)]
+mod notifications;
 use codex_mcp_platform::{
     cloudflare,
     runtime::{self, Controller},
@@ -169,7 +171,15 @@ async fn install_update(app: State<'_, Arc<App>>, handle: tauri::AppHandle) -> R
         .await
         .clone()
         .ok_or("Check for an update first")?;
-    let installer = updates::download(&manifest).await.map_err(error)?;
+    let installer = updates::download_with_progress(&manifest, |received, total| {
+        use tauri::Emitter;
+        let _ = handle.emit(
+            "update-progress",
+            json!({"received":received,"total":total}),
+        );
+    })
+    .await
+    .map_err(error)?;
     app.controller.stop().await.map_err(error)?;
     updates::launch(&installer, &app.controller.install).map_err(error)?;
     app.quitting.store(true, Ordering::SeqCst);
@@ -196,6 +206,10 @@ fn run() -> anyhow::Result<()> {
     secure::private_root()?;
     let install = std::env::current_exe()?.parent().unwrap().to_path_buf();
     codex_mcp_platform::migration::cleanup(&install)?;
+    #[cfg(windows)]
+    if notifications::register(&install).is_err() {
+        eprintln!("Codex Local MCP: update notification registration is unavailable");
+    }
     let settings = Settings::load()?;
     let app = Arc::new(App {
         controller: Controller::new(install),
@@ -231,6 +245,10 @@ fn run() -> anyhow::Result<()> {
         ])
         .setup(|application| {
             let handle = application.handle();
+            let notification_handle = handle.clone();
+            handle
+                .notification()
+                .on_action(move |_| show(&notification_handle))?;
             let open =
                 MenuItem::with_id(handle, "open", "Open Codex Local MCP", true, None::<&str>)?;
             let update =

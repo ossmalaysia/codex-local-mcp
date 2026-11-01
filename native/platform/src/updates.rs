@@ -151,6 +151,12 @@ pub async fn check(current: &str) -> Result<Option<Manifest>> {
     )?))
 }
 pub async fn download(manifest: &Manifest) -> Result<PathBuf> {
+    download_with_progress(manifest, |_, _| {}).await
+}
+pub async fn download_with_progress(
+    manifest: &Manifest,
+    report: impl Fn(u64, u64),
+) -> Result<PathBuf> {
     let root = secure::private_root()?.join("updates");
     secure::no_links(&root)?;
     tokio::fs::create_dir_all(&root).await?;
@@ -171,6 +177,8 @@ pub async fn download(manifest: &Manifest) -> Result<PathBuf> {
             .await?;
         let mut received = 0u64;
         let mut hash = Sha256::new();
+        let mut last = std::time::Instant::now();
+        report(0, manifest.size);
         while let Some(chunk) = response.chunk().await? {
             received += chunk.len() as u64;
             ensure!(
@@ -179,6 +187,10 @@ pub async fn download(manifest: &Manifest) -> Result<PathBuf> {
             );
             hash.update(&chunk);
             file.write_all(&chunk).await?;
+            if last.elapsed() >= Duration::from_millis(200) {
+                report(received, manifest.size);
+                last = std::time::Instant::now();
+            }
         }
         file.sync_all().await?;
         drop(file);
@@ -188,6 +200,7 @@ pub async fn download(manifest: &Manifest) -> Result<PathBuf> {
             "The update failed signature-linked SHA256 verification"
         );
         tokio::fs::rename(&part, &complete).await?;
+        report(received, manifest.size);
         Ok::<_, anyhow::Error>(complete)
     }
     .await;
