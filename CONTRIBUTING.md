@@ -28,6 +28,10 @@ CI runs these on Ubuntu, Windows and macOS against Node 20 and 22. **Windows is 
 optional** — the process spawning, argument quoting and process-tree termination in
 `src/codex.ts` are platform-specific and have all broken there before.
 
+Changes to the Windows app (`native/`, `installer/`) also need the Rust checks listed in
+[native/README.md](native/README.md#build-and-check). If you change the desktop interface,
+refresh the guide screenshots with `node scripts/capture-guide-images.mjs`.
+
 ## What makes a good change
 
 - **Fix a bug you can demonstrate.** Add a test that fails before your fix and passes after.

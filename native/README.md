@@ -33,10 +33,14 @@ Test workspace folders remain in the temporary directory for diagnosis.
 ```powershell
 node scripts/build-desktop-ui.mjs
 cargo clippy --locked -p codex-mcp-desktop --all-targets -- -D warnings
-./scripts/build-native-desktop.ps1 -Version 0.7.1
-./scripts/test-windows-setup.ps1 -Version 0.7.1
+./scripts/build-native-desktop.ps1 -Version <version>
+./scripts/test-windows-setup.ps1 -Version <version>
 node scripts/test-native-desktop.mjs clean
 ```
+
+Published installers are built by the release workflow from a clean checkout of the exact release tag.
+After a UI change, refresh the screenshots in the [Windows app guide](../docs/WINDOWS-GUIDE.md) with
+`node scripts/build-desktop-ui.mjs` and `node scripts/capture-guide-images.mjs`. They use a mock backend and example data.
 
 This produces a normal per-user setup EXE under `artifacts`. No file copying is required from the user.
 The manifest records `service: rust` and `desktop: tauri`.
@@ -92,22 +96,30 @@ Do not type or log real credentials in a shell command. The desktop manager supp
 Isolated HTTP startup runs the real sandbox probe before opening remote access.
 The probe uses no AI model. Failure blocks startup.
 
-## Release gates and remaining stages
+## Upgrading from older installations
 
-The local native tests cover the protocol contract, detached jobs, artifact reads, images, browser login, PKCE, and refresh-family revocation.
+The setup EXE uses a separate application folder when an old MSI installation exists, and leaves the MSI registration intact.
+The standard update ZIP is a one-time bridge for installed C# managers, which use their GitHub digest checks for that first upgrade.
+Later updates use the pinned signing key.
+Saved OpenAI sign-ins, encrypted passwords, Cloudflare credentials, custom hostnames, and workspaces remain available.
+
+## Tests and known limits
+
+The local native tests cover the protocol contract, detached jobs, parallel image runs, artifact reads, images, browser login, PKCE,
+refresh-family revocation, and saved OAuth sessions.
 They also check invalid paths, byte limits, child environment secrets, output bounds, and activity privacy.
-Run real sandbox probes and installer lifecycle tests on each supported Windows backend before a stable native release.
-Test a real Claude connector through Cloudflare before switching the default release channel.
+Run real sandbox probes and installer lifecycle tests on each supported Windows backend before a stable release.
 
-The Tauri interface, signed-update trust transition, persistent OAuth sessions, and final Node removal are separate migration stages.
-The existing updater remains unchanged. It still trusts GitHub TLS and release digests without an independent publisher signature.
-The image decoder currently runs on bounded blocking workers within the service process. It is not a separate restricted process.
-The child starts before Job Object assignment. A suspended process launch is a further hardening task.
-Neither Job Objects nor Rust replace the Codex execution sandbox.
+Known limits:
 
-See [the migration design](../docs/RUST-MIGRATION.md) for the target architecture, acceptance measurements, and security boundaries.
+- The image decoder runs on bounded blocking workers inside the service process, not in a separate restricted process.
+- The child process starts before Job Object assignment. A suspended process launch is a further hardening task.
+- Neither Job Objects nor Rust replace the Codex execution sandbox.
 
-## Task settings and live progress (0.7.1)
+See [the migration design](../docs/RUST-MIGRATION.md) for the architecture, acceptance measurements, and security boundaries,
+and [the validation record](../docs/RUST-VALIDATION.md) for measured results.
+
+## Task settings and live progress
 
 Open **Workspace → Task and image settings**. Save, then restart the connection to apply new defaults.
 Claude can override these defaults through MCP parameters:
