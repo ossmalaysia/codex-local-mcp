@@ -189,8 +189,6 @@ export class BoundedBuffer {
 }
 
 export function runCodex(opts: RunOptions): Promise<RunResult> {
-  // A missing CLI must never fall back to executable lookup in a writable root.
-  if (!path.isAbsolute(config.codexBin)) return Promise.reject(new CodexNotFoundError(config.codexBin));
   // Argument validation must surface as a rejection, not a synchronous throw:
   // callers await this, and a sync throw skips their error handling path.
   let rawArgs: string[];
@@ -199,6 +197,8 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
   } catch (err) {
     return Promise.reject(err);
   }
+  // Validate caller input first, then refuse executable lookup in a writable root.
+  if (!path.isAbsolute(config.codexBin)) return Promise.reject(new CodexNotFoundError(config.codexBin));
 
   const isWindows = process.platform === "win32";
   const useCmd = isWindows && !config.codexBin.toLowerCase().endsWith(".exe");
