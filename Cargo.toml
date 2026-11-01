@@ -6,4 +6,3 @@ resolver = "2"
 lto = "thin"
 strip = "debuginfo"
 codegen-units = 1
-
