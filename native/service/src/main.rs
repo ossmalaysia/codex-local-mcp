@@ -115,11 +115,17 @@ async fn start() -> Result<()> {
             "CODEX_MCP_PUBLIC_URL",
             &format!("http://127.0.0.1:{port}"),
         ))?;
-        // Validate credentials and public origin before starting any tunnel.
-        let initial_auth = auth::Auth::new(
+        // Saved in the private directory so an update or restart keeps Claude signed in.
+        let sessions = (!config.private.is_empty())
+            .then(|| std::path::PathBuf::from(&config.private).join("oauth-sessions.json"));
+        let tunnel = args.iter().any(|a| a == "--tunnel");
+        // Validate credentials and public origin before starting any tunnel. A tunnel
+        // can change the origin, so only the final authority keeps sessions.
+        let initial_auth = auth::Auth::with_sessions(
             public.clone(),
             value("CODEX_MCP_USERNAME", "admin"),
             secrets.password.clone(),
+            if tunnel { None } else { sessions.clone() },
         )?;
         process::login(&config).await?;
         if config.mode == "isolated" {
@@ -143,15 +149,16 @@ async fn start() -> Result<()> {
             }
             cancel.cancel();
         });
-        let auth = if args.iter().any(|a| a == "--tunnel") {
+        let auth = if tunnel {
             ensure!(host == "127.0.0.1", "Cloudflare requires IPv4 loopback");
             eprintln!("Activating Cloudflare Tunnel...");
             public =
                 tunnel::start(port, public, &secrets.tunnel_token, jobs.cancel.clone()).await?;
-            auth::Auth::new(
+            auth::Auth::with_sessions(
                 public.clone(),
                 value("CODEX_MCP_USERNAME", "admin"),
                 secrets.password.clone(),
+                sessions,
             )?
         } else {
             initial_auth

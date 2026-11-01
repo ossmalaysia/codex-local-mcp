@@ -64,7 +64,8 @@ See [native build instructions](native/README.md), [validation results](docs/RUS
 
 The standard update ZIP supports installed C# managers. The Rust app removes unchanged legacy runtime files on first launch.
 Your saved OpenAI sign-in, encrypted passwords, Cloudflare credentials, custom hostname, and workspaces remain available.
-After updating, restart the connection and reconnect the connector in Claude. OAuth grants remain in memory.
+Claude stays signed in across updates and restarts for 30 days after its sign-in, unless the MCP username, password, or address changes.
+A Quick Tunnel has a new address after each start, so Claude must connect again with the new URL.
 
 Open **Codex Local MCP** from the Start menu. Then:
 
