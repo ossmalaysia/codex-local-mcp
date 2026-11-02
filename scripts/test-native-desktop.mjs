@@ -84,7 +84,7 @@ try {
   await page.getByRole("heading", { name: "Choose a place to work" }).waitFor();
   const state = () =>
     page.evaluate(() => window.__TAURI__.core.invoke("state"));
-  assert.equal((await state()).version, "0.9.0");
+  assert.equal((await state()).version, "0.9.1");
   if (mode === "saved") {
     assert.equal((await state()).settings.passwordSaved, true);
     const account = await page.evaluate(() =>
