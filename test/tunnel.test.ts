@@ -19,6 +19,7 @@ describe("built-in Cloudflare Tunnel", () => {
     const token = "private-test-token";
     const tunnel = await startQuickTunnel({ port: 3210, bin: process.execPath, mode: "named", token, publicUrl: new URL("https://codex.example.com") }, (_bin, args, env) => {
       expect(args).toContain("run");
+      expect(args[args.indexOf("--protocol") + 1]).toBe("http2");
       expect(args.join(" ")).not.toContain(token);
       expect(env.TUNNEL_TOKEN).toBe(token);
       expect(env.CODEX_MCP_PASSWORD).toBeUndefined();
@@ -49,6 +50,7 @@ describe("built-in Cloudflare Tunnel", () => {
       configFile = args[args.indexOf("--config") + 1];
       expect(fs.readFileSync(configFile, "utf8")).toBe("{}\n");
       expect(args).toContain("http://127.0.0.1:3210");
+      expect(args[args.indexOf("--protocol") + 1]).toBe("http2");
       setImmediate(() => {
         child.stderr.write(" | https://calm-blue-");
         child.stderr.write("fox.trycloudflare.com |\n");
