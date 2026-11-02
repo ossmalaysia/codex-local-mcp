@@ -143,6 +143,7 @@ Image generation quality and background are prompt requests, subject to the imag
 
 Parallel image generation: a request with `count` above 1 starts one Codex run per image inside one job.
 `CODEX_MAX_RUNNING_JOBS` (default 4) caps Codex processes as well as jobs, so other jobs wait for a free slot.
+The desktop sets it from **Tasks at the same time** (1–32) in the task settings. Claude cannot change this limit.
 The job's `timeout_sec` is one deadline for all its runs. A run that waits for a slot receives only the time that remains.
 If some runs fail, the result still contains the images that succeeded, lists the failures, and reports an error.
 Separate requests also run in parallel when they use different workspaces. Requests for the same workspace run one at a time.

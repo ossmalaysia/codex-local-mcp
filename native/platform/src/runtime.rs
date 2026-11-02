@@ -83,6 +83,7 @@ pub fn configure(cmd: &mut Command, install: &Path, settings: &Settings) -> Resu
             "CODEX_TASK_DEFAULTS",
             serde_json::to_string(&settings.execution)?,
         )
+        .env("CODEX_MAX_RUNNING_JOBS", settings.max_tasks.to_string())
         .env("CODEX_MCP_HOST", "127.0.0.1")
         .env("CODEX_MCP_PORT", settings.port.to_string())
         .env("CODEX_MCP_USERNAME", &settings.username)

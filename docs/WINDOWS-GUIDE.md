@@ -133,7 +133,7 @@ You can ask for any of these settings in plain words. Claude passes them to the 
 
 | Setting | Values | Default | Notes |
 |---|---|---|---|
-| Number of images | 1–10 | 1 | Images generate in parallel, up to 4 at a time. |
+| Number of images | 1–10 | 1 | Images generate in parallel, up to 4 at a time. Change this limit with **Tasks at the same time** under **Workspace → Task and image settings** (1–32). |
 | Size | `WIDTHxHEIGHT`, for example `1024x1024` or `1536x1024`, or `auto` | `1024x1024` | The saved file keeps the aspect ratio and is never enlarged. The result shows the real size. |
 | Quality | `low`, `medium`, `high`, `auto` | `low` | `low` is a fast draft. Use `high` for final images. |
 | File format | `jpeg`, `png`, `webp` | `jpeg` | Use PNG or WebP for a transparent background. |

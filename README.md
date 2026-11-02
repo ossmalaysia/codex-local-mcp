@@ -296,7 +296,7 @@ All settings are optional. Set them in the client's `env` block.
 | `CODEX_RUNTIME_ROOT` | *(none)* | Read-only runtime folder for the isolated profile. Set by the Windows app. |
 | `CODEX_PRIVATE_ROOT` | *(none)* | Private folder that sandboxed commands cannot access. Set by the Windows app. |
 | `CODEX_WAIT_SEC` | `45` | How long a call waits before it returns a `job_id`. At most 50. |
-| `CODEX_MAX_RUNNING_JOBS` | `4` | How many Codex jobs (and, in the Windows app, Codex processes) may run at once. |
+| `CODEX_MAX_RUNNING_JOBS` | `4` | How many Codex jobs (and, in the Windows app, Codex processes) may run at once. The Windows app sets it from **Tasks at the same time**. |
 | `CODEX_JOB_RETENTION_SEC` | `3600` | How long a finished result stays available. |
 | `CODEX_MCP_APP_VIEW` | `false` | Show images in the chat as an MCP App card. Experimental; see above. |
 

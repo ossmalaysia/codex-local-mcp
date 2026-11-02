@@ -164,6 +164,7 @@ function apply(s: Json) {
     input(id).value = String(s[key] ?? "");
   input("network").checked = !!s.network;
   input("show-prompts").checked = !!s.showPrompts;
+  input("max-tasks").value = String(s.maxTasks ?? 4);
   input("password").value = "";
   input("tunnel-token").value = "";
   $("password-state").textContent = s.passwordSaved
@@ -209,6 +210,7 @@ function data() {
     network: input("network").checked,
     port: Number(input("port").value),
     showPrompts: input("show-prompts").checked,
+    maxTasks: Number(input("max-tasks").value),
   };
 }
 async function save() {
