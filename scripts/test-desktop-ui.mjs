@@ -233,10 +233,19 @@ try {
   assert.match(await page.locator("#notice").innerText(), /Image count/);
   assert.equal(await page.locator("#workspace").isVisible(), true);
   await page.locator("#image-count").fill("1");
+  assert.equal(await page.locator("#max-tasks").inputValue(), "4");
+  await page.locator("#max-tasks").fill("33");
+  await page
+    .locator("#workspace")
+    .getByRole("button", { name: "Save and continue →" })
+    .click();
+  assert.match(await page.locator("#notice").innerText(), /Tasks at the same time/);
+  await page.locator("#max-tasks").fill("6");
   await page.getByRole("button", { name: /Activity/ }).click();
   await page.locator("#show-prompts").check();
   await page.getByText("Prompts will show in Activity").waitFor();
   assert.equal(await page.evaluate(() => window.__saved.showPrompts), true);
+  assert.equal(await page.evaluate(() => window.__saved.maxTasks), 6);
   // After an update restarts the connection, the window says so once.
   await page.getByRole("button", { name: "1 Workspace" }).click();
   await page.evaluate(() => (window.__resumed = { ok: true }));

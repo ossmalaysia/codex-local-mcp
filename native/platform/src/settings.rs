@@ -19,6 +19,13 @@ pub struct Settings {
     /// Off by default: prompts can hold private text, so showing them in
     /// desktop activity is an explicit choice.
     pub show_prompts: bool,
+    /// Codex runs that may work at the same time, across all jobs and images.
+    pub max_tasks: u64,
+}
+/// The service caps `CODEX_MAX_RUNNING_JOBS` at the same ceiling.
+pub const MAX_TASKS: u64 = 32;
+fn default_max_tasks() -> u64 {
+    4
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -36,6 +43,7 @@ impl Default for Settings {
             port: 3000,
             execution: Default::default(),
             show_prompts: false,
+            max_tasks: default_max_tasks(),
         }
     }
 }
@@ -55,6 +63,8 @@ pub struct Input {
     pub execution: crate::task_options::TaskOptions,
     #[serde(default)]
     pub show_prompts: bool,
+    #[serde(default = "default_max_tasks")]
+    pub max_tasks: u64,
 }
 impl Settings {
     pub fn load() -> Result<Self> {
@@ -86,6 +96,7 @@ impl Settings {
         next.port = input.port;
         next.execution = input.execution;
         next.show_prompts = input.show_prompts;
+        next.max_tasks = input.max_tasks;
         if !input.password.is_empty() {
             next.password = secure::protect(input.password.as_bytes())?;
         }
@@ -99,6 +110,10 @@ impl Settings {
     }
     pub fn validate(&self, install: &Path, connection: bool) -> Result<()> {
         self.execution.validate()?;
+        ensure!(
+            (1..=MAX_TASKS).contains(&self.max_tasks),
+            "Choose 1 to {MAX_TASKS} tasks at the same time"
+        );
         let workspace = PathBuf::from(&self.workspace);
         ensure!(
             !workspace.components().any(|c| matches!(
@@ -170,13 +185,42 @@ impl Settings {
         Ok(())
     }
     pub fn view(&self) -> serde_json::Value {
-        serde_json::json!({"workspace":self.workspace,"username":self.username,"passwordSaved":!self.password.is_empty(),"tunnel":self.tunnel,"tokenSaved":!self.tunnel_token.is_empty(),"publicUrl":self.public_url,"backend":self.backend,"network":self.network,"port":self.port,"execution":self.execution,"showPrompts":self.show_prompts})
+        serde_json::json!({"workspace":self.workspace,"username":self.username,"passwordSaved":!self.password.is_empty(),"tunnel":self.tunnel,"tokenSaved":!self.tunnel_token.is_empty(),"publicUrl":self.public_url,"backend":self.backend,"network":self.network,"port":self.port,"execution":self.execution,"showPrompts":self.show_prompts,"maxTasks":self.max_tasks})
     }
 }
+
 fn overlap(a: &Path, b: &Path) -> bool {
     let a = a.to_string_lossy().replace('/', "\\").to_lowercase();
     let b = b.to_string_lossy().replace('/', "\\").to_lowercase();
     a.trim_end_matches('\\') == b.trim_end_matches('\\')
         || a.starts_with(&(b.trim_end_matches('\\').to_owned() + "\\"))
         || b.starts_with(&(a.trim_end_matches('\\').to_owned() + "\\"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_settings_keep_the_default_task_limit() {
+        let saved: Settings = serde_json::from_str(r#"{"Workspace":"C:/w"}"#).unwrap();
+        assert_eq!(saved.max_tasks, 4);
+        let input: Input = serde_json::from_str(
+            r#"{"workspace":"C:/w","username":"a","password":"","tunnel":"quick","tunnelToken":"","publicUrl":"","backend":"mxc","network":false,"port":3000}"#,
+        )
+        .unwrap();
+        assert_eq!(input.max_tasks, 4);
+    }
+
+    #[test]
+    fn rejects_task_limits_outside_the_service_range() {
+        for max_tasks in [0, MAX_TASKS + 1] {
+            let settings = Settings {
+                max_tasks,
+                ..Default::default()
+            };
+            let error = settings.validate(Path::new("C:/app"), false).unwrap_err();
+            assert!(error.to_string().contains("tasks at the same time"));
+        }
+    }
 }
