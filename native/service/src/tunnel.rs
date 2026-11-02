@@ -1,6 +1,11 @@
 use crate::{config::value, process};
 use anyhow::{Result, ensure};
-use std::{path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
+};
 use tokio::{io::AsyncReadExt, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -11,6 +16,19 @@ impl Drop for TempConfig {
         let _ = std::fs::remove_file(self.0.join("config.yml"));
         let _ = std::fs::remove_dir(&self.0);
     }
+}
+
+fn connector_args(config: &Path, named: bool, port: u16) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["tunnel".into(), "--config".into(), config.into()];
+    // QUIC binds UDP sockets on every address, which makes Windows Firewall ask the user
+    // to allow inbound access. HTTP/2 uses only outbound TCP, and the tunnel needs nothing inbound.
+    args.extend(["--no-autoupdate", "--protocol", "http2"].map(OsString::from));
+    if named {
+        args.push("run".into());
+    } else {
+        args.extend(["--url".into(), format!("http://127.0.0.1:{port}").into()]);
+    }
+    args
 }
 
 pub async fn start(port: u16, public: Url, token: &str, cancel: CancellationToken) -> Result<Url> {
@@ -41,14 +59,13 @@ pub async fn start(port: u16, public: Url, token: &str, cancel: CancellationToke
     cmd.env_remove("OPENAI_API_KEY")
         .env_remove("CODEX_HOME")
         .env_remove("NODE_OPTIONS");
-    cmd.current_dir(bin.parent().unwrap())
-        .args(["tunnel", "--config"])
-        .arg(config.0.join("config.yml"))
-        .arg("--no-autoupdate");
+    cmd.current_dir(bin.parent().unwrap()).args(connector_args(
+        &config.0.join("config.yml"),
+        named,
+        port,
+    ));
     if named {
-        cmd.arg("run").env("TUNNEL_TOKEN", token);
-    } else {
-        cmd.args(["--url", &format!("http://127.0.0.1:{port}")]);
+        cmd.env("TUNNEL_TOKEN", token);
     }
     let mut child = cmd
         .stdin(Stdio::null())
@@ -166,5 +183,18 @@ mod tests {
         ] {
             assert!(quick_url(log).is_none());
         }
+    }
+
+    #[test]
+    fn connector_uses_outbound_tcp_only() {
+        let config = Path::new("config.yml");
+        let quick = connector_args(config, false, 3210);
+        let named = connector_args(config, true, 3210);
+        for args in [&quick, &named] {
+            let protocol = args.iter().position(|a| a == "--protocol").unwrap();
+            assert_eq!(args[protocol + 1], "http2");
+        }
+        assert_eq!(quick.last().unwrap(), "http://127.0.0.1:3210");
+        assert_eq!(named.last().unwrap(), "run");
     }
 }

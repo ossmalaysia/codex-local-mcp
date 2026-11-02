@@ -65,7 +65,9 @@ export async function startQuickTunnel(
   let child: ChildProcess;
   try {
     await fsp.writeFile(configFile, "{}\n", { mode: 0o600 });
-    const args = ["tunnel", "--config", configFile, "--no-autoupdate",
+    // QUIC binds UDP sockets on every address, which makes Windows Firewall ask the user to
+    // allow inbound access. HTTP/2 uses only outbound TCP, and the tunnel needs nothing inbound.
+    const args = ["tunnel", "--config", configFile, "--no-autoupdate", "--protocol", "http2",
       ...(named ? ["run"] : ["--url", `http://127.0.0.1:${options.port}`])];
     const env = tunnelEnv();
     if (named) env.TUNNEL_TOKEN = options.token;

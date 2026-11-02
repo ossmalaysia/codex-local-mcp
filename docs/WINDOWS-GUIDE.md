@@ -189,6 +189,7 @@ Your settings, passwords, and workspaces are kept.
 |---|---|
 | **Start connection** fails at the sandbox check | Install all Windows updates and try again. If MXC is not supported on your PC, select **Windows restricted token** as the sandbox on the Workspace page; its setup can ask for administrator approval. |
 | Claude says the connector cannot connect | Check that the sidebar shows **Connected**. With a Quick Tunnel, copy the new URL and update the connector in Claude. |
+| Windows Firewall asks to allow `cloudflared` | Older versions of the app showed this alert. The tunnel only makes outbound connections, so you can select **Cancel**. Update the app to stop the alert. |
 | Claude asks you to sign in again | This is expected after you change the MCP username or password, or after a Quick Tunnel restart. Enter the MCP login again. |
 | The OpenAI account shows **Not signed in** | Select **Sign in to OpenAI** on the Accounts page. |
 | An image task fails with a rate limit | You reached your OpenAI image limit. Wait, or ask for fewer images at once. |
