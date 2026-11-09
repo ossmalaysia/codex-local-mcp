@@ -59,6 +59,19 @@ try {
   const timed = await local.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_TIMEOUT', timeout_sec: 1, wait_sec: 5 } });
   assert.equal(timed.isError, true); assert.match(timed.content[0].text, /TIMED OUT/);
   const failed = await local.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_FAILURE', wait_sec: 5 } }); assert.equal(failed.isError, true);
+  // Cancelling stops the process tree; files written before the cancel are still reported.
+  const sleeping = await local.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_SLEEP private-prompt-sentinel', workspace: 'cancel-me', wait_sec: 0 } });
+  const sleepId = /job_id: ([\w-]+)/.exec(sleeping.content[0].text)[1];
+  for (let i = 0; i < 100 && !(await fs.readFile(path.join(root, 'cancel-me', 'pids.txt'), 'utf8').catch(() => '')).includes(' '); i++) await new Promise(r => setTimeout(r, 100));
+  const runningList = await local.callTool({ name: 'codex_jobs_list', arguments: { status: 'running' } });
+  assert.match(runningList.content[0].text, new RegExp(`job_id: ${sleepId} \\| tool: codex_run \\| status: running`)); assert.ok(!runningList.content[0].text.includes('private-prompt-sentinel'));
+  const cancel = await local.callTool({ name: 'codex_job_cancel', arguments: { job_id: sleepId } });
+  assert.notEqual(cancel.isError, true); assert.match(cancel.content[0].text, /status: cancelled/);
+  const cancelled = await local.callTool({ name: 'codex_job_result', arguments: { job_id: sleepId, wait_sec: 0 } });
+  assert.equal(cancelled.isError, true); assert.match(cancelled.content[0].text, /CANCELLED - process killed/); assert.match(cancelled.content[0].text, /partial\.txt/);
+  assert.match((await local.callTool({ name: 'codex_jobs_list', arguments: {} })).content[0].text, new RegExp(`job_id: ${sleepId} \\| tool: codex_run \\| status: cancelled`));
+  assert.equal((await local.callTool({ name: 'codex_job_cancel', arguments: { job_id: 'no-such-job' } })).isError, true);
+  assert.match((await local.callTool({ name: 'codex_job_cancel', arguments: { job_id: id } })).content[0].text, /already finished/);
   const image = await local.callTool({ name: 'codex_generate_image', arguments: { prompt: 'fixture image', open: false, wait_sec: 5 } });
   assert.equal(image.isError, false); assert.ok(image.content.some(c => c.type === 'image')); assert.ok(image.content.some(c => c.type === 'resource_link'));
   // Three images run as separate Codex sessions, at most CODEX_MAX_RUNNING_JOBS (2) at once.
@@ -73,7 +86,7 @@ try {
   assert.match(activity, /"parallel":2/); assert.match(activity, /"input_tokens":300/);
   assert.match(activity, /running_command/); assert.match(activity, /writing_files/); assert.ok(!activity.includes('private-prompt-sentinel')); assert.ok(!activity.includes(password)); assert.ok(!activity.includes('private-command-sentinel')); assert.match(activity, /"steps":3/); assert.match(activity, /"input_tokens":100/);
   await local.close();
-  console.log('Native stdio passed: contract, detached jobs, polling, artifacts, images, parallel images, path denial, timeout, failure, child secrets, and private activity.');
+  console.log('Native stdio passed: contract, detached jobs, polling, cancel, list, artifacts, images, parallel images, path denial, timeout, failure, child secrets, and private activity.');
 
   // Reserve an unused local port. The child is managed and closes on stdin EOF.
   const reservation = createServer(); await listen(reservation); const port = reservation.address().port; await close(reservation);

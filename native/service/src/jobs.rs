@@ -15,12 +15,15 @@ pub struct Job {
     pub action: String,
     pub workspace: PathBuf,
     pub started: Instant,
+    /// Cancelled by codex_job_cancel, or with the server. A child of `Jobs::cancel`.
+    pub cancel: CancellationToken,
     options: crate::task_options::TaskOptions,
     state: Mutex<JobState>,
     pub notify: Notify,
 }
 struct JobState {
     result: Option<Value>,
+    status: &'static str,
     phase: &'static str,
     finished: Option<Instant>,
     last_event: Instant,
@@ -38,6 +41,16 @@ pub struct Jobs {
     pub cancel: CancellationToken,
     pub artifact_slots: Arc<Semaphore>,
 }
+
+/// What `Jobs::cancel_job` did.
+pub enum Cancel {
+    Unknown,
+    Finished(&'static str),
+    Cancelled(Arc<Job>),
+}
+
+/// How long codex_job_cancel waits for the stopped job to settle.
+const CANCEL_WAIT_SECS: f64 = 10.0;
 
 impl Jobs {
     pub fn new(config: Arc<Config>) -> Arc<Self> {
@@ -127,9 +140,11 @@ impl Jobs {
             action: action.into(),
             workspace: dir,
             started: Instant::now(),
+            cancel: self.cancel.child_token(),
             options: options.clone(),
             state: Mutex::new(JobState {
                 result: None,
+                status: "running",
                 phase: "queued",
                 finished: None,
                 last_event: Instant::now(),
@@ -166,7 +181,6 @@ impl Jobs {
         let owner = self.clone();
         let running = job.clone();
         tokio::spawn(async move {
-            let _permit = permit;
             let heartbeat_owner = owner.clone();
             let heartbeat_job = running.clone();
             let heartbeat = tokio::spawn(async move {
@@ -180,17 +194,25 @@ impl Jobs {
                 .await
                 .unwrap_or_else(artifacts::error);
             heartbeat.abort();
-            let status = if result["isError"].as_bool() == Some(true) {
-                "failed"
-            } else {
-                "completed"
+            // A cancel that lands after Codex already finished cleanly changes nothing.
+            let status = match (
+                result["isError"].as_bool() == Some(true),
+                running.cancel.is_cancelled(),
+            ) {
+                (true, true) => "cancelled",
+                (true, false) => "failed",
+                _ => "completed",
             };
             {
                 let mut state = running.state.lock().unwrap();
                 state.result = Some(result);
+                state.status = status;
                 state.finished = Some(Instant::now());
             }
             owner.emit(&running, status, json!({}));
+            // Free the slot before waking waiters, so a caller that saw the job
+            // finish (a cancel, say) can start the next one straight away.
+            drop(permit);
             running.notify.notify_waiters();
         });
         Ok(job)
@@ -214,7 +236,12 @@ impl Jobs {
             locks.insert(key, Arc::downgrade(&lock));
             lock
         };
-        let _guard = tokio::select! { guard = lock.lock() => guard, _ = self.cancel.cancelled() => return Err(anyhow::anyhow!("Server stopped")) };
+        let _guard = tokio::select! {
+            guard = lock.lock() => guard,
+            _ = self.cancel.cancelled() => return Err(anyhow::anyhow!("Server stopped")),
+            // Queued behind another run on this workspace: give up the place.
+            _ = job.cancel.cancelled() => return Err(anyhow::anyhow!("Cancelled before Codex started; nothing ran and no files changed.")),
+        };
         self.phase(job, "preparing");
         let dir = job.workspace.clone();
         let before = tokio::task::spawn_blocking(move || workspace::snapshot(&dir)).await?;
@@ -282,11 +309,16 @@ impl Jobs {
             }
         );
         let summary = format!(
-            "workspace: {}\nexit code: {}{}\nduration: {:.1}s\n\n--- codex output ---\n{}\n\n--- files created or changed ---\n{}",
+            "workspace: {}\nexit code: {}{}{}\nduration: {:.1}s\n\n--- codex output ---\n{}\n\n--- files created or changed ---\n{}",
             job.workspace.display(),
             run.code.map_or("n/a".into(), |c| c.to_string()),
             if run.timed_out {
                 " (TIMED OUT - process killed)"
+            } else {
+                ""
+            },
+            if run.cancelled {
+                " (CANCELLED - process killed)"
             } else {
                 ""
             },
@@ -307,7 +339,7 @@ impl Jobs {
         let mut content = vec![artifacts::text(summary)];
         content.extend(collected.content);
         Ok(
-            json!({"content":content,"isError":run.timed_out || run.code != Some(0) || missing_image}),
+            json!({"content":content,"isError":run.timed_out || run.cancelled || run.code != Some(0) || missing_image}),
         )
     }
 
@@ -333,6 +365,7 @@ impl Jobs {
                 let permit = tokio::select! {
                     permit = owner.runs.clone().acquire_owned() => permit?,
                     _ = owner.cancel.cancelled() => anyhow::bail!("Server stopped"),
+                    _ = job.cancel.cancelled() => anyhow::bail!("Cancelled before this run started"),
                 };
                 let _permit = permit;
                 let left = deadline
@@ -349,7 +382,7 @@ impl Jobs {
                     prompt,
                     left,
                     &options,
-                    owner.cancel.child_token(),
+                    job.cancel.child_token(),
                     report,
                 )
                 .await?;
@@ -432,7 +465,8 @@ impl Jobs {
             .extend(extras.as_object().unwrap().clone());
         activity::emit(self.config.activity, event);
     }
-    pub fn get(&self, id: &str) -> Option<Arc<Job>> {
+    /// Every job still held, after dropping finished ones past retention.
+    fn held(&self) -> Vec<Arc<Job>> {
         let mut entries = self.entries.lock().unwrap();
         entries.retain(|_, j| {
             j.state
@@ -441,19 +475,104 @@ impl Jobs {
                 .finished
                 .is_none_or(|t| t.elapsed() < self.config.retention)
         });
-        entries.get(id).cloned()
+        entries.values().cloned().collect()
+    }
+    pub fn get(&self, id: &str) -> Option<Arc<Job>> {
+        self.held().into_iter().find(|j| j.id == id)
+    }
+    /// Waits up to `secs` for the job to finish.
+    async fn wait(job: &Job, secs: f64) {
+        let notified = job.notify.notified(); // Register before checking completion.
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if job.state.lock().unwrap().result.is_none() {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs_f64(secs), notified).await;
+        }
+    }
+    /// Stops a running job. The Codex process tree is killed, the job still
+    /// collects and reports its files, and its slot frees once it settles.
+    pub fn cancel_job(&self, id: &str) -> Cancel {
+        let Some(job) = self.get(id) else {
+            return Cancel::Unknown;
+        };
+        let status = job.state.lock().unwrap().status;
+        if status != "running" {
+            return Cancel::Finished(status);
+        }
+        job.cancel.cancel();
+        Cancel::Cancelled(job)
+    }
+    pub async fn cancel_result(&self, id: &str) -> Value {
+        match self.cancel_job(id) {
+            Cancel::Unknown => artifacts::error(format!(
+                "Unknown job \"{id}\". It may have expired, or the server restarted."
+            )),
+            Cancel::Finished(status) => json!({"content":[artifacts::text(format!(
+                "status: {status}\njob_id: {id}\n\nThe job already finished, so there was nothing to cancel. Call codex_job_result with this job_id to collect its result."
+            ))]}),
+            Cancel::Cancelled(job) => {
+                // Give the kill a moment to land so the caller usually sees the
+                // final state, but never hold the call near the client timeout.
+                Self::wait(&job, CANCEL_WAIT_SECS).await;
+                let status = job.state.lock().unwrap().status;
+                let (shown, said) = if status == "running" {
+                    (
+                        "cancelling",
+                        "Cancellation was requested and the Codex process is being stopped. ",
+                    )
+                } else {
+                    (status, "The job was stopped. ")
+                };
+                json!({"content":[artifacts::text(format!(
+                    "status: {shown}\njob_id: {}\nworkspace: {}\n\n{said}Call codex_job_result with this job_id for its output and any files it wrote.",
+                    job.id,
+                    job.workspace.display()
+                ))]})
+            }
+        }
+    }
+    /// One line per held job, newest first. Never includes prompt text.
+    pub fn list(&self, filter: &str) -> Value {
+        let mut jobs = self.held();
+        jobs.sort_by_key(|j| std::cmp::Reverse(j.started));
+        let lines: Vec<String> = jobs
+            .iter()
+            .filter_map(|job| {
+                let state = job.state.lock().unwrap();
+                let running = state.status == "running";
+                if (filter == "running" && !running) || (filter == "finished" && running) {
+                    return None;
+                }
+                let elapsed = state
+                    .finished
+                    .map_or(job.started.elapsed(), |t| t.duration_since(job.started));
+                Some(format!(
+                    "job_id: {} | tool: {} | status: {} | phase: {} | elapsed: {}s | workspace: {}",
+                    job.id,
+                    job.action,
+                    state.status,
+                    state.phase,
+                    elapsed.as_secs_f64().round() as u64,
+                    job.workspace.display()
+                ))
+            })
+            .collect();
+        let text = if lines.is_empty() {
+            match filter {
+                "running" | "finished" => format!("No {filter} jobs."),
+                _ => "No jobs.".into(),
+            }
+        } else {
+            lines.join("\n")
+        };
+        json!({"content":[artifacts::text(text)]})
     }
     pub async fn result(&self, job: Arc<Job>, wait: Option<f64>) -> Value {
         let wait = wait
             .filter(|n| n.is_finite())
             .unwrap_or(self.config.wait as f64)
             .clamp(0.0, 50.0);
-        let notified = job.notify.notified(); // Register before checking completion.
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-        if job.state.lock().unwrap().result.is_none() {
-            let _ = tokio::time::timeout(std::time::Duration::from_secs_f64(wait), notified).await;
-        }
+        Self::wait(&job, wait).await;
         job.state.lock().unwrap().result.clone().unwrap_or_else(|| json!({"content":[artifacts::text(format!("status: running\njob_id: {}\nworkspace: {}\nelapsed: {}s\n\nCodex is still working. Call codex_job_result with this job_id to collect the result.", job.id, job.workspace.display(), job.started.elapsed().as_secs()))]}))
     }
 }
@@ -479,6 +598,7 @@ struct Combined {
     stderr: String,
     code: Option<i32>,
     timed_out: bool,
+    cancelled: bool,
     duration: u128,
     threads: Vec<String>,
 }
@@ -519,6 +639,7 @@ impl Combined {
                 None
             },
             timed_out: runs.iter().any(|(_, r)| r.timed_out),
+            cancelled: runs.iter().any(|(_, r)| r.cancelled),
             duration: runs.iter().map(|(_, r)| r.duration).max().unwrap_or(0),
             threads: runs.into_iter().filter_map(|(_, r)| r.thread).collect(),
         }
@@ -549,6 +670,7 @@ mod tests {
             stderr: String::new(),
             code,
             timed_out: false,
+            cancelled: false,
             duration: 10,
             thread: Some(thread.into()),
         }
@@ -615,6 +737,156 @@ mod tests {
         let control = prompt_preview(&"\u{1}".repeat(5000));
         assert!(serde_json::to_string(&control["prompt"]).unwrap().len() <= PROMPT_PREVIEW_JSON);
         assert_eq!(control["promptTruncated"], true);
+    }
+
+    fn fixture_config(root: &std::path::Path) -> Config {
+        // cargo builds the examples alongside the test binaries (target/<profile>/deps).
+        let exe = std::env::current_exe().unwrap();
+        let bin = exe.parent().unwrap().parent().unwrap().join(format!(
+            "examples/fake_codex{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        assert!(bin.is_file(), "build the fake_codex example first: {bin:?}");
+        Config {
+            root: root.canonicalize().unwrap(),
+            bin,
+            model: String::new(),
+            mode: "workspace-write".into(),
+            backend: String::new(),
+            network: false,
+            runtime: String::new(),
+            private: String::new(),
+            timeout: 120,
+            max_timeout: 1800,
+            output: 40_000,
+            wait: 0,
+            max_jobs: 1,
+            retention: std::time::Duration::from_secs(3600),
+            inline: 350_000,
+            response: 750_000,
+            files: 200,
+            activity: false,
+            activity_prompts: false,
+            defaults: Default::default(),
+        }
+    }
+
+    /// True while the process exists. A Linux zombie has already exited.
+    fn alive(pid: u32) -> bool {
+        if cfg!(windows) {
+            let out = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+        } else if cfg!(target_os = "linux") {
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
+                s.rsplit_once(") ")
+                    .is_some_and(|(_, r)| !r.starts_with('Z'))
+            })
+        } else {
+            false
+        }
+    }
+
+    fn text(result: &Value) -> String {
+        result["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    async fn eventually(mut check: impl FnMut() -> bool) -> bool {
+        for _ in 0..150 {
+            if check() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        check()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_kills_the_tree_reports_files_and_frees_the_slot() {
+        let root = tempfile::tempdir().unwrap();
+        let jobs = Jobs::new(Arc::new(fixture_config(root.path())));
+        let job = jobs
+            .start(
+                "codex_run",
+                json!({"prompt":"private-prompt-sentinel FAKE_SLEEP","workspace":"cancel-me"}),
+            )
+            .unwrap();
+        let pids_file = job.workspace.join("pids.txt");
+        assert!(
+            eventually(|| std::fs::read_to_string(&pids_file).is_ok_and(|s| s.contains(' '))).await
+        );
+        let pids: Vec<u32> = std::fs::read_to_string(&pids_file)
+            .unwrap()
+            .split(' ')
+            .map(|p| p.trim().parse().unwrap())
+            .collect();
+        assert!(pids.iter().all(|p| alive(*p)));
+
+        // The single slot is taken while the job runs.
+        assert!(jobs.start("codex_run", json!({"prompt":"quick"})).is_err());
+        let running = text(&jobs.list("running"));
+        assert!(running.contains(&format!(
+            "job_id: {} | tool: codex_run | status: running",
+            job.id
+        )));
+        assert!(!running.contains("private-prompt-sentinel"));
+
+        let cancelled = jobs.cancel_result(&job.id).await;
+        assert_ne!(cancelled["isError"], true);
+        assert!(
+            text(&cancelled).contains("status: cancelled"),
+            "{cancelled}"
+        );
+        assert!(eventually(|| !pids.iter().any(|p| alive(*p))).await);
+
+        let result = jobs.result(job.clone(), Some(0.0)).await;
+        assert_eq!(result["isError"], true);
+        assert!(text(&result).contains("(CANCELLED - process killed)"));
+        assert!(text(&result).contains("partial.txt"));
+        assert!(job.workspace.join("partial.txt").is_file());
+
+        // The slot is free again, and a finished job has nothing to cancel.
+        let next = jobs
+            .start("codex_run", json!({"prompt":"quick","workspace":"next"}))
+            .unwrap();
+        assert_eq!(
+            jobs.result(next.clone(), Some(20.0)).await["isError"],
+            false
+        );
+        let finished = jobs.cancel_result(&next.id).await;
+        assert_ne!(finished["isError"], true);
+        assert!(text(&finished).contains("status: completed"));
+        assert!(text(&finished).contains("already finished"));
+
+        let all = text(&jobs.list("all"));
+        let lines: Vec<_> = all.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with(&format!(
+            "job_id: {} | tool: codex_run | status: completed",
+            next.id
+        )));
+        assert!(lines[1].starts_with(&format!(
+            "job_id: {} | tool: codex_run | status: cancelled",
+            job.id
+        )));
+        assert!(
+            lines[0].contains(" | elapsed: ")
+                && lines[0].ends_with(&format!("workspace: {}", next.workspace.display()))
+        );
+        assert_eq!(text(&jobs.list("running")), "No running jobs.");
+        assert_eq!(text(&jobs.list("finished")).lines().count(), 2);
+
+        let unknown = jobs.cancel_result("no-such-job").await;
+        assert_eq!(unknown["isError"], true);
+        assert!(text(&unknown).contains("Unknown job \"no-such-job\""));
     }
 
     #[test]

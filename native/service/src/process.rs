@@ -21,6 +21,8 @@ pub struct Output {
     pub stderr: String,
     pub code: Option<i32>,
     pub timed_out: bool,
+    /// Stopped through the cancellation token: the job was cancelled or the server stopped.
+    pub cancelled: bool,
     pub duration: u128,
     pub thread: Option<String>,
 }
@@ -154,12 +156,13 @@ pub async fn run(
         let _ = stdin.write_all(prompt.as_bytes()).await;
         let _ = stdin.shutdown().await;
     });
-    let timed_out;
-    let code;
+    let (code, timed_out, cancelled);
     tokio::select! {
-        result = child.wait() => { code = result?.code(); timed_out = false; }
-        _ = tokio::time::sleep(Duration::from_secs(timeout)) => { code = None; timed_out = true; }
-        _ = cancel.cancelled() => { code = None; timed_out = false; }
+        result = child.wait() => { code = result?.code(); timed_out = false; cancelled = false; }
+        _ = tokio::time::sleep(Duration::from_secs(timeout)) => { code = None; timed_out = true; cancelled = false; }
+        // Cancellation kills the tree below and still returns normally, so the
+        // job collects and reports whatever the run wrote before it stopped.
+        _ = cancel.cancelled() => { code = None; timed_out = false; cancelled = true; }
     }
     // Terminate descendants even when the parent exits but descendants retain its pipes.
     drop(tree);
@@ -173,6 +176,7 @@ pub async fn run(
         stderr,
         code,
         timed_out,
+        cancelled,
         duration: started.elapsed().as_millis(),
         thread,
     })

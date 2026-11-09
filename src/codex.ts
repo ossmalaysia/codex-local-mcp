@@ -11,6 +11,12 @@ export interface RunOptions {
   model?: string;
   reasoningEffort?: string;
   onProgress?: (phase: TaskPhase) => void;
+  /**
+   * Aborting stops the run: the process tree is killed and the promise resolves
+   * normally with `cancelled: true`, so the caller still diffs and reports
+   * whatever the run wrote before it was stopped.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunResult {
@@ -19,6 +25,7 @@ export interface RunResult {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  cancelled: boolean;
   durationMs: number;
   command: string;
 }
@@ -265,6 +272,20 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
     ? commandLine
     : `${config.codexBin} ${rawArgs.join(" ")}`;
 
+  // Cancelled before it started: there is nothing to kill, so do not start it.
+  if (opts.signal?.aborted) {
+    return Promise.resolve({
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      signal: null,
+      timedOut: false,
+      cancelled: true,
+      durationMs: 0,
+      command,
+    });
+  }
+
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, {
       // Deliberately NOT the task workspace: on Windows the executable lookup
@@ -281,6 +302,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
     const stderr = new BoundedBuffer(config.maxOutputChars);
     const progress = new CodexProgress((phase) => opts.onProgress?.(phase));
     let timedOut = false;
+    let cancelled = false;
     let settled = false;
     let reaper: NodeJS.Timeout | undefined;
 
@@ -289,25 +311,40 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
       settled = true;
       clearTimeout(timer);
       if (reaper) clearTimeout(reaper);
+      opts.signal?.removeEventListener("abort", onAbort);
       resolve({
         stdout: stdout.toString(),
         stderr: stderr.toString(),
         exitCode,
         signal,
         timedOut,
+        cancelled,
         durationMs: Date.now() - started,
         command,
       });
     };
 
-    const timer = setTimeout(() => {
-      timedOut = true;
+    // Shared by the timeout and cancellation: kill the whole tree, then settle.
+    const stop = () => {
+      if (reaper || settled) return;
       if (child.pid) killTree(child.pid);
       // A detached grandchild can hold the pipes open, so "close" may never
       // arrive. Settle anyway shortly after the kill rather than hanging.
       reaper = setTimeout(() => finish(null, "SIGKILL"), 5_000);
       reaper.unref();
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stop();
     }, opts.timeoutSec * 1000);
+
+    function onAbort() {
+      if (settled || timedOut) return;
+      cancelled = true;
+      stop();
+    }
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout.on("data", (chunk: Buffer) =>
       stdout.push(chunk.toString("utf8")),
@@ -323,6 +360,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
       settled = true;
       clearTimeout(timer);
       if (reaper) clearTimeout(reaper);
+      opts.signal?.removeEventListener("abort", onAbort);
       if (err.code === "ENOENT") {
         reject(new CodexNotFoundError(config.codexBin));
         return;
