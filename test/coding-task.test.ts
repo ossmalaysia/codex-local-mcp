@@ -15,7 +15,9 @@ import { resultText, useMcpClient, type ToolResult } from "./mcp-client.js";
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "codex-mcp-git-"));
 const origin = path.join(scratch, "origin.git");
 const clone = path.join(scratch, "clone");
-const gitId = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "init.defaultBranch=main"];
+// autocrlf off: Windows runners enable it globally, which would check files out
+// with CRLF and make byte-exact assertions about applied patches fail.
+const gitId = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "init.defaultBranch=main", "-c", "core.autocrlf=false"];
 const run = (cwd: string, ...args: string[]) =>
   execFileSync("git", [...gitId, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 

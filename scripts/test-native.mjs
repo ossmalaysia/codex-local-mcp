@@ -84,7 +84,7 @@ try {
     const gitName = process.platform === 'win32' ? 'git.exe' : 'git';
     const gitBin = (process.env.PATH ?? '').split(path.delimiter).filter(d => path.isAbsolute(d)).map(d => path.join(d, gitName)).find(f => { try { return statSync(f).isFile(); } catch { return false; } });
     assert.ok(gitBin, 'git is required for the codex_task tests');
-    const git = (cwd, ...args) => execFileSync(gitBin, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const git = (cwd, ...args) => execFileSync(gitBin, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'init.defaultBranch=main', '-c', 'core.autocrlf=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     const origin = path.join(scratch, 'origin.git'), seed = path.join(scratch, 'seed'), clone = path.join(scratch, 'clone');
     const marker = path.join(scratch, 'hook-ran');
     git(scratch, 'init', '-q', '--bare', origin); git(scratch, 'init', '-q', seed);
