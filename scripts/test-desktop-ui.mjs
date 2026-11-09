@@ -79,10 +79,19 @@ try {
                 signedIn: true,
                 domains: [{ id: "test", name: "example.com" }],
               };
-            case "save_settings":
+            case "save_settings": {
+              // The service checks each project folder for a Git clone.
+              const bad = (args.input.projects ?? []).find(
+                (p) => !p.path.includes("repo"),
+              );
+              if (bad)
+                throw new Error(
+                  `Project "${bad.name}": the folder is not a Git repository (no .git found)`,
+                );
               settings = { ...settings, ...args.input };
               window.__saved = args.input;
               return settings;
+            }
             case "generate_password":
               return { ...settings, passwordSaved: true };
             case "start_connection":
@@ -211,6 +220,8 @@ try {
   await page.getByRole("button", { name: "1 Workspace" }).click();
   // Settings are locked, not rejected, while the connection runs.
   assert.equal(await page.locator("#folder").isDisabled(), true);
+  assert.equal(await page.locator("#project-add").isDisabled(), true);
+  assert.equal(await page.locator("#allowed-models").isDisabled(), true);
   await page.getByRole("button", { name: "Stop connection" }).click();
   await page.locator("#locked-note").waitFor({ state: "hidden" });
   assert.equal(await page.locator("#folder").isDisabled(), false);
@@ -241,11 +252,118 @@ try {
     .click();
   assert.match(await page.locator("#notice").innerText(), /Tasks at the same time/);
   await page.locator("#max-tasks").fill("6");
+  // Coding projects: add, validate, edit, remove, and save at once.
+  const saved = () => page.evaluate(() => window.__saved);
+  const saveProject = () =>
+    page.getByRole("button", { name: "Save project" }).click();
+  await page.getByText("No projects yet.").waitFor();
+  assert.equal(await page.locator("#project-count").innerText(), "None");
+  await page
+    .getByText("Codex works on a temporary copy and returns a patch")
+    .waitFor();
+  await page.getByRole("button", { name: "Add project" }).click();
+  assert.equal(await page.locator("#project-editor").isVisible(), true);
+  assert.equal(
+    await page.locator("#project-setup").getAttribute("placeholder"),
+    "npm ci",
+  );
+  assert.equal(
+    await page.locator("#project-checks input").nth(1).getAttribute("placeholder"),
+    "npm test",
+  );
+  await page.locator("#project-name").fill("bad name");
+  await saveProject();
+  assert.match(await page.locator("#notice").innerText(), /Project name/);
+  await page.locator("#project-name").fill("web");
+  await page.locator("#project-path").fill("C:\\src\\plain-folder");
+  await saveProject();
+  assert.match(
+    await page.locator("#notice").innerText(),
+    /not a Git repository/,
+  );
+  assert.equal(await page.locator("#project-editor").isVisible(), true);
+  await page.getByText("No projects yet.").waitFor();
+  // An open draft blocks Save and continue instead of being dropped.
+  await page
+    .locator("#workspace")
+    .getByRole("button", { name: "Save and continue →" })
+    .click();
+  assert.match(
+    await page.locator("#notice").innerText(),
+    /Save project or Cancel/,
+  );
+  await page.locator("#project-path").fill("C:\\src\\web-repo");
+  await page.locator("#project-setup").fill("npm ci");
+  await page.getByRole("textbox", { name: "Check name" }).fill("test");
+  await page.getByRole("textbox", { name: "Check command" }).fill("npm test");
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.getByRole("textbox", { name: "Check name" }).nth(1).fill("test");
+  await page
+    .getByRole("textbox", { name: "Check command" })
+    .nth(1)
+    .fill("npm run lint");
+  await saveProject();
+  assert.match(await page.locator("#notice").innerText(), /listed twice/);
+  await page.getByRole("textbox", { name: "Check name" }).nth(1).fill("lint");
+  await saveProject();
+  await page.getByText("Project web saved.").waitFor();
+  assert.equal(await page.locator("#project-editor").isVisible(), false);
+  assert.deepEqual((await saved()).projects, [
+    {
+      name: "web",
+      path: "C:\\src\\web-repo",
+      setup: "npm ci",
+      checks: [
+        { name: "test", command: "npm test" },
+        { name: "lint", command: "npm run lint" },
+      ],
+    },
+  ]);
+  await page.getByText("Setup: npm ci · Checks: test, lint").waitFor();
+  assert.equal(await page.locator("#project-count").innerText(), "1 project");
+  await page.getByRole("button", { name: "Add project" }).click();
+  await page.locator("#project-name").fill("WEB");
+  await saveProject();
+  assert.match(await page.locator("#notice").innerText(), /already exists/);
+  // Text from settings is shown as text, never parsed as markup.
+  await page.locator("#project-name").fill("api");
+  await page.locator("#project-path").fill("C:\\src\\<b>api</b>-repo");
+  await page.getByRole("button", { name: "Remove this check" }).click();
+  await saveProject();
+  await page.getByText("C:\\src\\<b>api</b>-repo").waitFor();
+  assert.equal(await page.locator("#projects b").count(), 0);
+  assert.deepEqual((await saved()).projects[1].checks, []);
+  await page.getByRole("button", { name: "Edit web" }).click();
+  assert.equal(await page.locator("#project-setup").inputValue(), "npm ci");
+  await page.locator("#project-setup").fill("");
+  await saveProject();
+  assert.equal((await saved()).projects[0].setup, "");
+  await page.getByRole("button", { name: "Remove api" }).click();
+  await page.getByText("Project api removed.").waitFor();
+  assert.deepEqual(
+    (await saved()).projects.map((p) => p.name),
+    ["web"],
+  );
+  // Allowed models are checked at the field before anything is saved.
+  await page.locator("#allowed-models").fill("gpt-5.1-codex, bad model");
+  await page
+    .locator("#workspace")
+    .getByRole("button", { name: "Save and continue →" })
+    .click();
+  assert.match(
+    await page.locator("#notice").innerText(),
+    /Allowed models: "bad model" is not a valid model ID/,
+  );
+  await page.locator("#allowed-models").fill(" gpt-5.1-codex, o4-mini, ");
   await page.getByRole("button", { name: /Activity/ }).click();
   await page.locator("#show-prompts").check();
   await page.getByText("Prompts will show in Activity").waitFor();
   assert.equal(await page.evaluate(() => window.__saved.showPrompts), true);
   assert.equal(await page.evaluate(() => window.__saved.maxTasks), 6);
+  assert.deepEqual(await page.evaluate(() => window.__saved.allowedModels), [
+    "gpt-5.1-codex",
+    "o4-mini",
+  ]);
   // After an update restarts the connection, the window says so once.
   await page.getByRole("button", { name: "1 Workspace" }).click();
   await page.evaluate(() => (window.__resumed = { ok: true }));
@@ -273,7 +391,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Desktop UI passed: saved accounts, step status, saved hostname, connection, live activity, update notice, errors, field validation, locked settings, prompt display, update reconnect, minimum window size.",
+    "Desktop UI passed: saved accounts, step status, saved hostname, connection, live activity, update notice, errors, field validation, locked settings, coding projects, allowed models, prompt display, update reconnect, minimum window size.",
   );
 } finally {
   await browser.close();

@@ -1,4 +1,7 @@
-use crate::secure;
+use crate::{
+    projects::{self, Project},
+    secure,
+};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -21,6 +24,10 @@ pub struct Settings {
     pub show_prompts: bool,
     /// Codex runs that may work at the same time, across all jobs and images.
     pub max_tasks: u64,
+    /// Local Git clones Claude may ask Codex to work on. Not secrets.
+    pub projects: Vec<Project>,
+    /// Codex models Claude may select. Empty allows any model.
+    pub allowed_models: Vec<String>,
 }
 /// The service caps `CODEX_MAX_RUNNING_JOBS` at the same ceiling.
 pub const MAX_TASKS: u64 = 32;
@@ -44,6 +51,8 @@ impl Default for Settings {
             execution: Default::default(),
             show_prompts: false,
             max_tasks: default_max_tasks(),
+            projects: Vec::new(),
+            allowed_models: Vec::new(),
         }
     }
 }
@@ -65,6 +74,10 @@ pub struct Input {
     pub show_prompts: bool,
     #[serde(default = "default_max_tasks")]
     pub max_tasks: u64,
+    #[serde(default)]
+    pub projects: Vec<Project>,
+    #[serde(default)]
+    pub allowed_models: Vec<String>,
 }
 impl Settings {
     pub fn load() -> Result<Self> {
@@ -97,6 +110,8 @@ impl Settings {
         next.execution = input.execution;
         next.show_prompts = input.show_prompts;
         next.max_tasks = input.max_tasks;
+        next.projects = projects::normalize(input.projects);
+        next.allowed_models = projects::normalize_models(input.allowed_models);
         if !input.password.is_empty() {
             next.password = secure::protect(input.password.as_bytes())?;
         }
@@ -135,6 +150,15 @@ impl Settings {
             "Keep workspaces separate from the application and its private data"
         );
         secure::no_links(&workspace)?;
+        // A clone inside the workspace could be changed by any task, and one
+        // inside the application folders could reach private data.
+        projects::validate(
+            &self.projects,
+            &self.allowed_models,
+            &self.execution.model,
+            &[&workspace, install, &private],
+            overlap,
+        )?;
         ensure!(
             !self.username.is_empty() && self.username.len() <= 256,
             "Enter an MCP username"
@@ -185,7 +209,7 @@ impl Settings {
         Ok(())
     }
     pub fn view(&self) -> serde_json::Value {
-        serde_json::json!({"workspace":self.workspace,"username":self.username,"passwordSaved":!self.password.is_empty(),"tunnel":self.tunnel,"tokenSaved":!self.tunnel_token.is_empty(),"publicUrl":self.public_url,"backend":self.backend,"network":self.network,"port":self.port,"execution":self.execution,"showPrompts":self.show_prompts,"maxTasks":self.max_tasks})
+        serde_json::json!({"workspace":self.workspace,"username":self.username,"passwordSaved":!self.password.is_empty(),"tunnel":self.tunnel,"tokenSaved":!self.tunnel_token.is_empty(),"publicUrl":self.public_url,"backend":self.backend,"network":self.network,"port":self.port,"execution":self.execution,"showPrompts":self.show_prompts,"maxTasks":self.max_tasks,"projects":self.projects,"allowedModels":self.allowed_models})
     }
 }
 
@@ -210,6 +234,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(input.max_tasks, 4);
+        assert!(saved.projects.is_empty() && saved.allowed_models.is_empty());
+        assert!(input.projects.is_empty() && input.allowed_models.is_empty());
+    }
+
+    #[test]
+    fn coding_projects_and_models_persist_and_reach_the_view() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"Workspace":"C:/w","Projects":[{"name":"web","path":"C:/src/web","setup":"npm ci","checks":[{"name":"test","command":"npm test"}]}],"AllowedModels":["gpt-5.1-codex"]}"#,
+        )
+        .unwrap();
+        let saved: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(saved.projects, settings.projects);
+        assert_eq!(saved.projects[0].checks[0].command, "npm test");
+        assert_eq!(saved.allowed_models, ["gpt-5.1-codex"]);
+        let view = saved.view();
+        assert_eq!(view["projects"][0]["name"], "web");
+        assert_eq!(view["projects"][0]["checks"][0]["name"], "test");
+        assert_eq!(view["allowedModels"][0], "gpt-5.1-codex");
+        let input: Input = serde_json::from_value(serde_json::json!({"workspace":"C:/w","username":"a","password":"","tunnel":"quick","tunnelToken":"","publicUrl":"","backend":"mxc","network":false,"port":3000,"projects":view["projects"],"allowedModels":view["allowedModels"]})).unwrap();
+        assert_eq!(input.projects, saved.projects);
     }
 
     #[test]

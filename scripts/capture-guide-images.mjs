@@ -31,6 +31,7 @@ const shots = [
   { name: "3-connection", page: "connection", state: "ready" },
   { name: "4-claude", page: "claude", state: "running" },
   { name: "5-activity", page: "activity", state: "running" },
+  { name: "6-coding-projects", page: "workspace", state: "ready", element: "#coding" },
 ];
 
 const browser = await chromium.launch();
@@ -54,6 +55,21 @@ for (const shot of shots) {
         network: false,
         port: 3000,
         showPrompts: running,
+        projects: fresh
+          ? []
+          : [
+              {
+                name: "shop-web",
+                path: "C:\\Users\\me\\source\\shop-web",
+                setup: "npm ci",
+                checks: [
+                  { name: "test", command: "npm test" },
+                  { name: "lint", command: "npm run lint" },
+                ],
+              },
+              { name: "billing-api", path: "C:\\Users\\me\\source\\billing-api", setup: "", checks: [] },
+            ],
+        allowedModels: fresh ? [] : ["gpt-5.1-codex", "gpt-5.1-codex-mini"],
       };
       const options = { count: 2, size: "1024x1024", quality: "low", output_format: "jpeg", output_compression: 80, background: "opaque", target_file_kb: 256, timeout_sec: 300 };
       const image = {
@@ -119,7 +135,8 @@ for (const shot of shots) {
     await page.setViewportSize({ width: 1100, height });
     await page.waitForTimeout(150);
   }
-  await page.screenshot({ path: `${out}${shot.name}.png` });
+  if (shot.element) await page.locator(shot.element).screenshot({ path: `${out}${shot.name}.png` });
+  else await page.screenshot({ path: `${out}${shot.name}.png` });
   await page.close();
   console.log(`${out}${shot.name}.png`);
 }

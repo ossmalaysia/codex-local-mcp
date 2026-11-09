@@ -97,6 +97,13 @@ pub fn configure(cmd: &mut Command, install: &Path, settings: &Settings) -> Resu
             },
         )
         .env("CLOUDFLARED_BIN", install.join("runtime/cloudflared.exe"));
+    coding(cmd, settings)
+}
+/// Unset when empty: the service then offers no projects and any model.
+fn coding(cmd: &mut Command, settings: &Settings) -> Result<()> {
+    for (key, value) in crate::projects::env(&settings.projects, &settings.allowed_models)? {
+        cmd.env(key, value);
+    }
     Ok(())
 }
 #[derive(Clone)]
@@ -483,8 +490,43 @@ fn within(path: &Path, root: &Path) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use super::{bounded_line, within};
-    use std::path::Path;
+    use super::{bounded_line, coding, within};
+    use crate::{projects::Project, settings::Settings};
+    use std::{ffi::OsStr, path::Path};
+    #[test]
+    fn coding_settings_reach_the_service_environment() {
+        let env = |settings: &Settings| {
+            let mut cmd = tokio::process::Command::new("codex-mcp-service");
+            cmd.env_clear();
+            coding(&mut cmd, settings).unwrap();
+            cmd.as_std()
+                .get_envs()
+                .filter(|(k, _)| k.to_string_lossy().starts_with("CODEX_"))
+                .map(|(k, v)| (k.to_owned(), v.map(OsStr::to_owned)))
+                .collect::<Vec<_>>()
+        };
+        // The service command starts from a cleared environment, so empty
+        // settings leave both variables unset.
+        assert!(env(&Settings::default()).is_empty());
+        let settings = Settings {
+            projects: vec![Project {
+                name: "web".into(),
+                path: "C:/src/web".into(),
+                ..Default::default()
+            }],
+            allowed_models: vec!["gpt-5.1-codex".into(), "o4-mini".into()],
+            ..Default::default()
+        };
+        let vars = env(&settings);
+        let get = |key: &str| {
+            vars.iter()
+                .find(|(k, _)| k == key)
+                .and_then(|(_, v)| v.clone())
+                .unwrap()
+        };
+        assert_eq!(get("CODEX_PROJECTS"), r#"{"web":{"path":"C:/src/web"}}"#);
+        assert_eq!(get("CODEX_ALLOWED_MODELS"), "gpt-5.1-codex,o4-mini");
+    }
     #[tokio::test]
     async fn child_lines_have_a_hard_memory_bound() {
         let mut reader = tokio::io::BufReader::new(&b"abcdef\n"[..]);

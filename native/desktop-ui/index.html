@@ -179,6 +179,80 @@
             </p>
           </details>
         </div>
+        <div id="coding" class="card">
+          <div class="card-head">
+            <h2>Coding projects</h2>
+            <span id="project-count" class="badge">None</span>
+          </div>
+          <p class="hint">
+            Claude can ask Codex to work on these repos. Codex works on a
+            temporary copy and returns a patch; your clone is only fetched,
+            never pushed.
+          </p>
+          <ul
+            id="projects"
+            class="project-list"
+            aria-label="Coding projects"
+          ></ul>
+          <button id="project-add">Add project</button>
+          <fieldset id="project-editor" hidden>
+            <legend id="project-editor-title">Add project</legend>
+            <label for="project-name">Project name</label
+            ><input
+              id="project-name"
+              autocomplete="off"
+              maxlength="64"
+              placeholder="my-app"
+            />
+            <p class="hint">Letters, digits, dots, dashes, or underscores.</p>
+            <label for="project-path">Local folder</label>
+            <div class="row">
+              <input
+                id="project-path"
+                autocomplete="off"
+                placeholder="C:\Users\me\source\my-app"
+              /><button id="project-browse">Browse…</button>
+            </div>
+            <p class="hint">A local Git clone. It must contain a .git entry.</p>
+            <label for="project-setup">Setup command (optional)</label
+            ><input
+              id="project-setup"
+              autocomplete="off"
+              maxlength="1024"
+              placeholder="npm ci"
+            />
+            <div class="check-head" id="project-checks-label">
+              Checks (optional)
+            </div>
+            <p class="hint">
+              Commands Codex runs to verify its work, as a name and a command.
+            </p>
+            <div
+              id="project-checks"
+              role="group"
+              aria-labelledby="project-checks-label"
+            ></div>
+            <div class="row wrap">
+              <button id="project-check-add" class="quiet">Add check</button>
+            </div>
+            <div class="row wrap">
+              <button id="project-save" class="primary">Save project</button
+              ><button id="project-cancel">Cancel</button>
+            </div>
+          </fieldset>
+          <hr />
+          <label for="allowed-models">Allowed models</label
+          ><input
+            id="allowed-models"
+            autocomplete="off"
+            placeholder="Any model"
+          />
+          <p class="hint">
+            Comma-separated Codex model IDs, for example gpt-5.1-codex,
+            gpt-5.1-codex-mini. Claude can choose only these models. Leave empty
+            to allow any model. Restart the connection after saving.
+          </p>
+        </div>
         <div class="footer">
           <button class="primary" data-next="accounts">
             Save and continue →
