@@ -3,6 +3,9 @@ import path from "node:path";
 import { config } from "./config.js";
 import { sandboxArguments } from "./sandbox.js";
 import { CodexProgress, type TaskPhase } from "./activity.js";
+import { REASONING_EFFORTS, SAFE_MODEL, UnsafeArgumentError } from "./models.js";
+
+export { UnsafeArgumentError };
 
 export interface RunOptions {
   prompt: string;
@@ -32,21 +35,6 @@ export class CodexNotFoundError extends Error {
   }
 }
 
-/**
- * Values that reach a Windows command line must not be able to smuggle in
- * environment expansion or quoting tricks. Model names are the only free-form
- * argument we pass, so they are restricted to characters real model ids use.
- */
-const SAFE_MODEL = /^[A-Za-z0-9._:/-]{1,128}$/;
-
-export class UnsafeArgumentError extends Error {
-  constructor(value: string) {
-    super(
-      `Refusing to pass model "${value}": only letters, digits and . _ : / - are allowed.`,
-    );
-  }
-}
-
 function buildArgs(opts: RunOptions): string[] {
   const args = [
     "exec",
@@ -69,11 +57,7 @@ function buildArgs(opts: RunOptions): string[] {
     args.push("--model", model);
   }
   if (opts.reasoningEffort && opts.reasoningEffort !== "default") {
-    if (
-      !["none", "minimal", "low", "medium", "high", "xhigh"].includes(
-        opts.reasoningEffort,
-      )
-    )
+    if (!(REASONING_EFFORTS as readonly string[]).includes(opts.reasoningEffort))
       throw new Error("Invalid reasoning effort");
     args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
   }
