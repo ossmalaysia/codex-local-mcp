@@ -69,6 +69,10 @@ in `SECURITY.md`.
   abandon a request at 60 seconds by default, and an image routinely takes longer. Work that
   outlasts the wait keeps running as a job and is collected with `codex_job_result`. A
   cancelled or timed-out call stops the *wait*, never the job.
+- **Cancelling a job stops the run, not the job.** `codex_job_cancel` aborts the job's signal
+  (a cancellation token in Rust); the run kills the process tree and returns normally with
+  `cancelled`, so the job still snapshots, diffs and reports what was written. Never cancel by
+  dropping or deleting the job.
 - **Validate before starting a job.** Bad sizes and workspace names must fail in the calling
   request, not become a job that fails later.
 - **Concurrent jobs are capped** (`CODEX_MAX_RUNNING_JOBS`). Jobs outlive their calls, so without

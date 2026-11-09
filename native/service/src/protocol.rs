@@ -134,6 +134,8 @@ impl ServerHandler for Protocol {
             "codex_generate_image",
             "codex_job_result",
             "codex_read_artifact",
+            "codex_job_cancel",
+            "codex_jobs_list",
         ]
         .contains(&name)
         {
@@ -193,6 +195,12 @@ impl ServerHandler for Protocol {
                     Err(_) => artifacts::error("Artifact worker failed"),
                 }
             }
+            "codex_job_cancel" => {
+                self.jobs
+                    .cancel_result(args["job_id"].as_str().unwrap_or(""))
+                    .await
+            }
+            "codex_jobs_list" => self.jobs.list(args["status"].as_str().unwrap_or("all")),
             _ => unreachable!(),
         };
         Ok(convert::<CallToolResult>(result)?.into())

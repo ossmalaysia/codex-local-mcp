@@ -1,4 +1,5 @@
 // Stands in for the real codex CLI so tests run without it installed.
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -16,6 +17,18 @@ process.stdin.on("end", () => {
   if (prompt.includes("FAIL")) {
     process.stderr.write("fake codex: refusing\n");
     process.exit(2);
+  }
+  // "SLEEP" stands in for a long run that gets cancelled: it writes a partial
+  // file, starts a grandchild so the whole tree has to be killed, records both
+  // process ids in pids.txt, then waits forever.
+  if (prompt.includes("SLEEP")) {
+    fs.writeFileSync(path.join(cwd, "partial.txt"), "written before cancel\n");
+    const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    fs.writeFileSync(path.join(cwd, "pids.txt"), `${process.pid} ${grandchild.pid}\n`);
+    setInterval(() => {}, 1000);
+    return;
   }
   if (prompt.includes("HANG")) {
     setInterval(() => {}, 1000);

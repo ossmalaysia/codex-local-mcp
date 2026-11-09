@@ -25,13 +25,32 @@ export interface Job<T> {
   finishedAt?: number;
   outcome?: Outcome<T>;
   progress?: TaskProgress;
+  /**
+   * Aborted by codex_job_cancel. The job's work passes it down to the Codex
+   * run, which kills the process tree and returns normally, so the work still
+   * finishes its post-run steps and the job still settles with a result.
+   */
+  signal: AbortSignal;
   /** Settles when the job finishes, whether it succeeded or failed. Never rejects. */
   done: Promise<void>;
 }
 
+export type JobStatus = "running" | "completed" | "failed" | "cancelled";
+
 export class JobLimitError extends Error {}
 
 const jobs = new Map<string, Job<unknown>>();
+const controllers = new WeakMap<Job<unknown>, AbortController>();
+
+export function jobStatus(job: Job<unknown>): JobStatus {
+  if (!job.outcome) return "running";
+  const failed =
+    !job.outcome.ok ||
+    Boolean((job.outcome.value as { isError?: boolean } | null)?.isError);
+  // A cancel that lands after Codex already finished cleanly changes nothing.
+  if (failed && job.signal.aborted) return "cancelled";
+  return failed ? "failed" : "completed";
+}
 
 function runningCount(): number {
   let running = 0;
@@ -49,9 +68,8 @@ function purgeExpired(now = Date.now()): void {
 
 export function reportJob(job: Job<unknown>, progress: TaskProgress): void {
   job.progress = { ...job.progress, ...progress };
-  const failed = job.outcome && (!job.outcome.ok || Boolean((job.outcome.value as { isError?: boolean } | null)?.isError));
   emitActivity({ type: "job", id: job.id, action: job.label, workspace: job.workspace,
-    status: job.outcome ? failed ? "failed" : "completed" : "running",
+    status: jobStatus(job),
     ...job.progress, elapsedMs: (job.finishedAt ?? Date.now()) - job.startedAt });
 }
 
@@ -65,13 +83,16 @@ export function startJob<T>(label: string, workspace: string, work: (job: Job<T>
     );
   }
 
+  const controller = new AbortController();
   const job: Job<T> = {
     id: randomUUID(),
     label,
     workspace,
     startedAt: Date.now(),
+    signal: controller.signal,
     done: Promise.resolve(),
   };
+  controllers.set(job as Job<unknown>, controller);
   // Promise.resolve().then() also captures a synchronous throw from work().
   job.done = Promise.resolve()
     .then(() => work(job))
@@ -99,6 +120,33 @@ export function startJob<T>(label: string, workspace: string, work: (job: Job<T>
 export function getJob(id: string): Job<unknown> | undefined {
   purgeExpired();
   return jobs.get(id);
+}
+
+export type CancelOutcome =
+  | { kind: "unknown" }
+  | { kind: "finished"; job: Job<unknown>; status: JobStatus }
+  | { kind: "already_cancelling"; job: Job<unknown> }
+  | { kind: "cancelled"; job: Job<unknown> };
+
+/**
+ * Stop a running job. This only signals it: the Codex process tree is killed,
+ * the work completes its snapshot and report, and the job settles normally, at
+ * which point it stops counting against the running-job cap.
+ */
+export function cancelJob(id: string): CancelOutcome {
+  const job = getJob(id);
+  if (!job) return { kind: "unknown" };
+  if (job.outcome) return { kind: "finished", job, status: jobStatus(job) };
+  if (job.signal.aborted) return { kind: "already_cancelling", job };
+  controllers.get(job)?.abort();
+  return { kind: "cancelled", job };
+}
+
+/** Every job still held, newest first. */
+export function listJobs(): Job<unknown>[] {
+  purgeExpired();
+  // A Map iterates in insertion order, which is start order.
+  return [...jobs.values()].reverse();
 }
 
 /** Choose how long a call waits, never exceeding the safe maximum. */

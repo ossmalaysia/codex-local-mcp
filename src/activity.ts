@@ -7,7 +7,7 @@ export type ActivityEvent = {
   id?: string;
   action: string;
   workspace?: string;
-  status?: "running" | "completed" | "failed";
+  status?: "running" | "completed" | "failed" | "cancelled";
   phase?: TaskPhase;
   elapsedMs?: number;
   files?: number;
