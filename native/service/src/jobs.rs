@@ -746,7 +746,7 @@ mod tests {
             "examples/fake_codex{}",
             std::env::consts::EXE_SUFFIX
         ));
-        assert!(bin.is_file(), "build the fake_codex example first: {bin:?}");
+        assert!(bin.is_file(), "run `cargo build --examples` first: {bin:?}");
         Config {
             root: root.canonicalize().unwrap(),
             bin,
