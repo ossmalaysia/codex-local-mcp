@@ -19,12 +19,25 @@ function num(name: string, fallback: number): number {
  * entries are skipped for the same reason.
  */
 function resolveCodexBin(raw: string): string {
-  if (path.isAbsolute(raw)) return raw;
-
-  const exts =
+  return resolveExecutable(
+    raw,
     process.platform === "win32"
       ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
-      : [""];
+      : [""],
+  );
+}
+
+/**
+ * The same absolute resolution for git. Only `.exe` is accepted on Windows:
+ * git is spawned directly, never through cmd.exe, so a `.cmd` or `.bat`
+ * launcher could not run without a shell.
+ */
+function resolveGitBin(raw: string): string {
+  return resolveExecutable(raw, process.platform === "win32" ? [".exe"] : [""]);
+}
+
+function resolveExecutable(raw: string, exts: string[]): string {
+  if (path.isAbsolute(raw)) return raw;
 
   for (const dir of (process.env.PATH || "").split(path.delimiter)) {
     if (!dir || !path.isAbsolute(dir)) continue;
@@ -92,4 +105,13 @@ export const config = {
    * timeouts, no tools/call logged), while the same call without it worked.
    */
   mcpAppView: process.env.CODEX_MCP_APP_VIEW === "true",
+  /**
+   * Local git clones codex_task may work on, as raw JSON. Parsed and validated
+   * by projects.ts, which reports a bad value per call instead of crashing.
+   */
+  projectsJson: process.env.CODEX_PROJECTS || "",
+  /** Absolute path to git, resolved like codexBin; see resolveGitBin. */
+  gitBin: resolveGitBin(process.env.CODEX_GIT_BIN || "git"),
+  /** A patch up to this many characters is inlined; a larger one is linked. */
+  maxPatchChars: num("CODEX_MAX_PATCH_CHARS", 200_000),
 };

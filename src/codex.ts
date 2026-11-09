@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { config } from "./config.js";
-import { sandboxArguments } from "./sandbox.js";
+import { sandboxArguments, type SandboxOverrides } from "./sandbox.js";
 import { CodexProgress, type TaskPhase } from "./activity.js";
 
 export interface RunOptions {
@@ -11,6 +11,12 @@ export interface RunOptions {
   model?: string;
   reasoningEffort?: string;
   onProgress?: (phase: TaskPhase) => void;
+  /** Sandbox adjustments for this run (codex_task's review mode and cache). */
+  sandbox?: SandboxOverrides;
+  /** Extra environment for Codex and the commands it runs. */
+  env?: Record<string, string>;
+  /** Codex writes its final message here, so nothing parses its log. */
+  outputLastMessage?: string;
 }
 
 export interface RunResult {
@@ -47,6 +53,11 @@ export class UnsafeArgumentError extends Error {
   }
 }
 
+/** For validating a caller's model before a job starts. */
+export function assertSafeModel(model: string | undefined): void {
+  if (model && !SAFE_MODEL.test(model)) throw new UnsafeArgumentError(model);
+}
+
 function buildArgs(opts: RunOptions): string[] {
   const args = [
     "exec",
@@ -59,6 +70,7 @@ function buildArgs(opts: RunOptions): string[] {
       process.platform,
       config.runtimeRoot,
       config.privateRoot,
+      opts.sandbox,
     ),
     // Workspaces are plain folders, not repos; without this codex refuses to run.
     "--skip-git-repo-check",
@@ -77,6 +89,7 @@ function buildArgs(opts: RunOptions): string[] {
       throw new Error("Invalid reasoning effort");
     args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
   }
+  if (opts.outputLastMessage) args.push("--output-last-message", opts.outputLastMessage);
   // Trailing "-" makes codex read the prompt from stdin, so no shell quoting of
   // untrusted prompt text is ever needed.
   args.push("-");
@@ -153,6 +166,24 @@ export function childEnv(): NodeJS.ProcessEnv {
       )
     )
       delete env[key];
+  }
+  return env;
+}
+
+/**
+ * Add variables to a child environment. Windows names are case-insensitive, so
+ * an existing NPM_CONFIG_CACHE would otherwise sit beside our npm_config_cache
+ * as a second key, and the child would get whichever Windows picked first.
+ */
+export function withEnv(base: NodeJS.ProcessEnv, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env = { ...base };
+  for (const [key, value] of Object.entries(extra)) {
+    if (process.platform === "win32") {
+      for (const existing of Object.keys(env)) {
+        if (existing.toLowerCase() === key.toLowerCase()) delete env[existing];
+      }
+    }
+    env[key] = value;
   }
   return env;
 }
@@ -274,7 +305,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
       windowsVerbatimArguments: useCmd,
       detached: !isWindows,
       windowsHide: true,
-      env: childEnv(),
+      env: withEnv(childEnv(), opts.env),
     });
 
     const stdout = new BoundedBuffer(config.maxOutputChars);

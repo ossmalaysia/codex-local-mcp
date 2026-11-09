@@ -207,6 +207,105 @@
       "execution": {
         "taskSupport": "forbidden"
       }
+    },
+    {
+      "name": "codex_projects",
+      "title": "List the local projects codex_task can work on",
+      "description": "List the git projects configured on this computer for codex_task, with the check names each one defines and whether it has a setup command. Local paths are not shown.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "codex_task",
+      "title": "Delegate a coding task on a local git project to Codex",
+      "description": "Have the local Codex CLI work on a configured git project (see codex_projects). Push your branch first: the server fetches `ref` from the project's origin into a fresh worktree of the local clone, Codex works there inside its sandbox, and the result is Codex's final message plus a git patch against the `base:` commit, to apply with `git apply`. Nothing is pushed. If Codex takes longer than wait_sec, this returns status: running and a job_id; call codex_job_result with it to collect the result.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The task for Codex, written as you would to a developer. Passed through as written."
+          },
+          "project": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Project name from codex_projects."
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Branch, tag or commit to fetch from the project's origin and work on."
+          },
+          "mode": {
+            "description": "\"edit\" (default) changes files and returns a patch; \"review\" is read-only and returns no patch.",
+            "type": "string",
+            "enum": [
+              "edit",
+              "review"
+            ]
+          },
+          "acceptance": {
+            "description": "Acceptance criteria, appended to the task under a \"Done when:\" line.",
+            "type": "string"
+          },
+          "checks": {
+            "description": "Names of the project's configured checks for Codex to run before finishing. Codex runs them inside its sandbox and reports the results; they are not independently verified.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "return": {
+            "description": "\"patch\" (default) inlines the patch when small enough; \"summary\" only links it.",
+            "type": "string",
+            "enum": [
+              "patch",
+              "summary"
+            ]
+          },
+          "model": {
+            "description": "Override the Codex model for this task.",
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "description": "Model reasoning effort. Supported values depend on the model.",
+            "type": "string",
+            "enum": [
+              "default",
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "timeout_sec": {
+            "description": "Seconds before Codex is killed. Default 300.",
+            "type": "number"
+          },
+          "wait_sec": {
+            "description": "Seconds to wait for the result before returning a job_id instead. Default 45, maximum 50, which keeps the call under common 60-second client timeouts.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "task",
+          "project",
+          "ref"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
     }
   ],
   "resources": [],

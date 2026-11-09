@@ -62,6 +62,47 @@ fn main() {
     } else {
         std::fs::write(dir.join("result.txt"), "native fixture output").unwrap();
     }
+    // Stands in for a coding task: change a tracked file, add an untracked one,
+    // and record the prompt that arrived.
+    if prompt.contains("EDIT_REPO") {
+        let readme = dir.join("README.md");
+        let mut text = std::fs::read_to_string(&readme).unwrap_or_default();
+        text.push_str("Edited by fake codex.\n");
+        std::fs::write(readme, text).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/added.txt"), "a new untracked file\n").unwrap();
+        std::fs::write(dir.join("notes.txt"), format!("prompt: {prompt}\n")).unwrap();
+    }
+    if let Some(n) = prompt
+        .split("BIGPATCH:")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next()?.parse::<usize>().ok())
+    {
+        let line = format!("{}\n", "x".repeat(79));
+        std::fs::write(dir.join("big.txt"), line.repeat(n.div_ceil(80))).unwrap();
+    }
+    // Codex writes its final message to --output-last-message.
+    if let Some(i) = args.iter().position(|a| a == "--output-last-message") {
+        let after = |flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .map_or("none".to_owned(), |i| args[i + 1].clone())
+        };
+        let roots = args
+            .iter()
+            .find(|a| a.starts_with("sandbox_workspace_write.writable_roots="))
+            .cloned()
+            .unwrap_or_else(|| "none".into());
+        std::fs::write(
+            &args[i + 1],
+            format!(
+                "fake codex final message\nsandbox: {}\nnpm cache: {}\nwritable roots: {roots}\n",
+                after("--sandbox"),
+                std::env::var("npm_config_cache").unwrap_or_else(|_| "unset".into())
+            ),
+        )
+        .unwrap();
+    }
     println!(
         "{}",
         serde_json::json!({"type":"item.completed","item":{"id":"one","type":"command_execution","status":"completed"}})

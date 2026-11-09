@@ -239,6 +239,8 @@ See the [Claude Code remote MCP documentation](https://code.claude.com/docs/en/m
 | `codex_generate_image` | `prompt`, `count?`, `size?`, `quality?`, `output_format?`, `background?`, `target_file_kb?`, `workspace?`, `open?`, `wait_sec?` | Generate images. Your description is passed through as written. |
 | `codex_job_result` | `job_id`, `wait_sec?` | Collect the result of a task that was still running. |
 | `codex_read_artifact` | `path`, `max_bytes?` | Read a file from a workspace. |
+| `codex_projects` | *(none)* | List the local git projects `codex_task` can use, with their check names. Paths are not shown. |
+| `codex_task` | `task`, `project`, `ref`, `mode?`, `acceptance?`, `checks?`, `return?`, `model?`, `reasoning_effort?`, `timeout_sec?`, `wait_sec?` | Run a coding task on a local git project and return a patch. See below. |
 
 Use the same `workspace` name across calls to keep working on the same files.
 The [Windows app guide](docs/WINDOWS-GUIDE.md#6-generate-images) lists the image settings and
@@ -265,6 +267,70 @@ draft. `size` must be `WIDTHxHEIGHT` or `auto`. The size is a request to the ima
 result reports each image's real dimensions. `open` defaults to `true` and opens each image in
 your default viewer, because MCP clients give tool-result images to the model and do not
 always show them in the chat.
+
+### Delegating coding tasks
+
+`codex_task` lets a remote agent, such as Claude Code running in the cloud and connected over
+[remote access](#remote-access-with-oauth), hand a programming task on a real repository to
+Codex on your computer and get a patch back. Your computer never pushes, and Codex is never
+given your git credentials: the fetch happens before Codex starts. (Under the default
+`workspace-write` sandbox Codex can still read files on the machine; the `isolated` profile the
+Windows app uses restricts reads too.)
+
+1. Configure the projects Codex may work on, as JSON in `CODEX_PROJECTS` (the Windows app writes
+   this for you). `path` is your existing local clone. `setup` and `checks` are optional:
+
+   ```json
+   {"web": {"path": "D:/src/web", "setup": "npm ci", "checks": {"test": "npm test", "lint": "npm run lint"}}}
+   ```
+
+2. The agent pushes its branch to the clone's `origin` (for example GitHub), then calls
+   `codex_task` with the project, the branch, and the task.
+3. The server runs `git fetch origin <ref>` in your clone, with your own credentials, and checks
+   the commit out in a fresh worktree under `CODEX_MCP_ROOT/tasks/<project>/`. Git hooks are
+   disabled for every git command it runs.
+4. Codex works in that worktree inside its sandbox. Package caches go to
+   `CODEX_MCP_ROOT/.cache/<project>`, which the sandbox lets it write, so installs work and are
+   reused by later tasks.
+5. The result has Codex's final message and a patch of everything it changed, new files
+   included, against the `base:` commit. The worktree is then removed; the patch and the final
+   message stay in `tasks/<project>/` as `<job_id>.patch` and `<job_id>.last.md`.
+
+```
+status: completed
+job_id: 7c0d...
+project: web
+ref: fix-login
+base: 3f2a9c1e...
+exit code: 0
+duration: 84.2s
+
+--- summary ---
+--- diffstat ---
+--- checks ---
+--- patch ---
+```
+
+Patches up to `CODEX_MAX_PATCH_CHARS` (default 200,000) are inlined. A larger one, or any patch
+when `return` is `"summary"`, comes as a `resource_link` to the saved file. `mode: "review"`
+runs Codex read-only and returns no patch. `acceptance` is added to the task under a
+`Done when:` line.
+
+**Setup and checks are run by Codex, inside its sandbox.** They are repository code, so the
+server never runs them itself. It asks Codex to run `setup` first and the requested `checks`
+before finishing, and to report the results. Check results are therefore reported by Codex,
+not independently verified; run your own CI on the result.
+
+Example from Claude Code in the cloud, after `claude mcp add --transport http codex-remote https://codex.example.com/mcp`:
+
+```text
+> Push this branch, then use codex_task on project "web", ref "fix-login", to make the
+  login form show a spinner while submitting. acceptance: "the existing tests pass",
+  checks: ["test"]. Apply the returned patch with git apply, review it, and commit.
+```
+
+Claude Code then pushes, calls `codex_task`, polls `codex_job_result` while Codex works, saves
+the `--- patch ---` section to a file, and runs `git apply --index <file>` on the same commit.
 
 ### Images in the chat (experimental, TypeScript server only)
 
@@ -299,6 +365,9 @@ All settings are optional. Set them in the client's `env` block.
 | `CODEX_MAX_RUNNING_JOBS` | `4` | How many Codex jobs (and, in the Windows app, Codex processes) may run at once. The Windows app sets it from **Tasks at the same time**. |
 | `CODEX_JOB_RETENTION_SEC` | `3600` | How long a finished result stays available. |
 | `CODEX_MCP_APP_VIEW` | `false` | Show images in the chat as an MCP App card. Experimental; see above. |
+| `CODEX_PROJECTS` | *(none)* | JSON object of local git projects for `codex_task`; see [Delegating coding tasks](#delegating-coding-tasks). An invalid value is reported by the tools, not fatal. |
+| `CODEX_GIT_BIN` | `git` | Absolute path to git, resolved once at startup like `CODEX_BIN`. A native `git.exe` on Windows. |
+| `CODEX_MAX_PATCH_CHARS` | `200000` | Largest `codex_task` patch returned inline; larger ones are linked. |
 
 ## How it works
 

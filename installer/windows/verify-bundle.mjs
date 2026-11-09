@@ -16,7 +16,19 @@ const sharp = load('./app/node_modules/sharp');
 const pixels = await sharp({ create: { width: 2, height: 2, channels: 4, background: '#4d46d7' } }).png().toBuffer();
 if ((await sharp(pixels).metadata()).width !== 2) throw new Error('Bundled native image processing failed.');
 const manifest = JSON.parse(fs.readFileSync(new URL('./release-manifest.json', import.meta.url), 'utf8').replace(/^\uFEFF/, ''));
+// The native contract is generated from this TypeScript server, so the Rust
+// service must offer exactly the same tool names. No fixed count to keep in step.
+async function bundledToolNames() {
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const reference = createServer();
+  const probe = new Client({ name: 'contract-reference', version: '1' });
+  try {
+    await reference.connect(b); await probe.connect(a);
+    return (await probe.listTools()).tools.map(t => t.name).sort();
+  } finally { await probe.close(); await reference.close(); }
+}
 if (manifest.service === 'rust') {
+  const expected = JSON.stringify(await bundledToolNames());
   const native = new Client({ name: 'native-bundle-verification', version: '1' });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-bundle-'));
   try {
@@ -24,7 +36,7 @@ if (manifest.service === 'rust') {
       command: fileURLToPath(new URL('./runtime/codex-mcp-service.exe', import.meta.url)),
       env: { ...process.env, CODEX_BIN: fileURLToPath(new URL('./runtime/codex/codex.exe', import.meta.url)), CODEX_MCP_ROOT: root, CODEX_MCP_TRANSPORT: 'stdio', CODEX_SANDBOX_MODE: 'workspace-write' },
     }));
-    if (native.getServerVersion()?.version !== manifest.version || (await native.listTools()).tools.length !== 4) throw new Error('Installed Rust service contract or version failed.');
+    if (native.getServerVersion()?.version !== manifest.version || JSON.stringify((await native.listTools()).tools.map(t => t.name).sort()) !== expected) throw new Error('Installed Rust service contract or version failed.');
     console.log(`Installed Rust service and version verified: ${manifest.version}. No AI model was called.`);
   } finally { await native.close(); fs.rmdirSync(root); }
 }

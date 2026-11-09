@@ -11,6 +11,8 @@ const nativeIndex = process.argv.indexOf('--service');
 const service = path.resolve(nativeIndex >= 0 ? process.argv[nativeIndex + 1] : `target/release/codex-mcp-service${ext}`);
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-native-benchmark-'));
 const env = { ...process.env, CODEX_BIN: path.resolve(`target/debug/examples/fake_codex${ext}`), CODEX_MCP_ROOT: root, CODEX_MCP_TRANSPORT: 'stdio', CODEX_SANDBOX_MODE: 'workspace-write', CODEX_MCP_ACTIVITY: '0', CODEX_MCP_APP_VIEW: 'false' };
+// Both services must list every tool in the shared contract.
+const contractTools = JSON.parse(await fs.readFile(new URL('../native/service/contract.json', import.meta.url), 'utf8')).tools.length;
 const rows = [];
 for (const [name, command, args] of [['typescript', process.execPath, [path.resolve('dist/index.js')]], ['rust', service, []]]) {
   const samples = [];
@@ -19,7 +21,7 @@ for (const [name, command, args] of [['typescript', process.execPath, [path.reso
     const start = performance.now();
     try {
       await client.connect(new StdioClientTransport({ command, args, env, stderr: 'pipe' }));
-      if ((await client.listTools()).tools.length !== 4) throw new Error('Missing tools');
+      if ((await client.listTools()).tools.length !== contractTools) throw new Error('Missing tools');
       samples.push(performance.now() - start);
     } finally { await client.close(); }
   }

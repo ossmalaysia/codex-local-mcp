@@ -15,7 +15,7 @@ pub struct Job {
     pub action: String,
     pub workspace: PathBuf,
     pub started: Instant,
-    options: crate::task_options::TaskOptions,
+    pub(crate) options: crate::task_options::TaskOptions,
     state: Mutex<JobState>,
     pub notify: Notify,
 }
@@ -34,7 +34,7 @@ pub struct Jobs {
     locks: Mutex<HashMap<PathBuf, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     slots: Arc<Semaphore>,
     /// Caps Codex processes, not only jobs: one image job can start several runs.
-    runs: Arc<Semaphore>,
+    pub(crate) runs: Arc<Semaphore>,
     pub cancel: CancellationToken,
     pub artifact_slots: Arc<Semaphore>,
 }
@@ -57,38 +57,7 @@ impl Jobs {
             .filter(|p| !p.is_empty())
             .ok_or_else(|| anyhow::anyhow!("prompt is required"))?;
         ensure!(prompt.len() <= 1_000_000, "Prompt exceeds the byte limit");
-        let mut values = serde_json::to_value(&self.config.defaults)?;
-        for key in [
-            "model",
-            "reasoning_effort",
-            "timeout_sec",
-            "count",
-            "size",
-            "quality",
-            "output_format",
-            "output_compression",
-            "background",
-            "target_file_kb",
-        ] {
-            if let Some(value) = args.get(key) {
-                values[key] = value.clone();
-            }
-        }
-        if args.get("model").is_none() && !self.config.model.is_empty() {
-            values["model"] = json!(self.config.model);
-        }
-        if args.get("timeout_sec").is_none() && std::env::var_os("CODEX_TASK_DEFAULTS").is_none() {
-            values["timeout_sec"] = json!(self.config.timeout.min(self.config.max_timeout));
-        }
-        if let Some(n) = args["timeout_sec"].as_f64() {
-            values["timeout_sec"] = json!(if n > 0.0 {
-                n.clamp(1.0, self.config.max_timeout.min(1800) as f64) as u64
-            } else {
-                self.config.defaults.timeout_sec
-            });
-        }
-        let options: crate::task_options::TaskOptions = serde_json::from_value(values)?;
-        options.validate()?;
+        let options = self.options(&args)?;
         // The caller's own text, not the service-added image instructions, is
         // what a user can improve. Sent once; the desktop keeps merged fields.
         let mut first = if self.config.activity_prompts {
@@ -122,12 +91,51 @@ impl Jobs {
             anyhow::anyhow!("Too many running jobs. Collect a result before starting another job")
         })?;
         let dir = workspace::prepare(&self.config.root, args["workspace"].as_str())?;
+        let job = self.register(action, dir, options)?;
+        self.emit(&job, "running", first);
+        let timeout = job.options.timeout_sec.min(self.config.max_timeout);
+        let owner = self.clone();
+        let running = job.clone();
+        self.spawn(&job, permit, async move {
+            owner.execute(&running, prompt, timeout, open).await
+        });
+        Ok(job)
+    }
+
+    /// Starts codex_task. Everything is validated before the job exists.
+    pub fn start_task(self: &Arc<Self>, args: Value) -> Result<Arc<Job>> {
+        let input = crate::coding::validate(&self.config, &args)?;
+        let options = self.options(&args)?;
+        let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
+            anyhow::anyhow!("Too many running jobs. Collect a result before starting another job")
+        })?;
+        let dir = workspace::prepare(
+            &self.config.root,
+            Some(&format!("tasks/{}", input.project.name)),
+        )?;
+        let job = self.register("codex_task", dir, options)?;
+        self.emit(&job, "running", json!({}));
+        let timeout = job.options.timeout_sec.min(self.config.max_timeout);
+        let owner = self.clone();
+        let running = job.clone();
+        self.spawn(&job, permit, async move {
+            crate::coding::execute(&owner, &running, input, timeout).await
+        });
+        Ok(job)
+    }
+
+    fn register(
+        &self,
+        action: &str,
+        dir: PathBuf,
+        options: crate::task_options::TaskOptions,
+    ) -> Result<Arc<Job>> {
         let job = Arc::new(Job {
             id: uuid::Uuid::new_v4().to_string(),
             action: action.into(),
             workspace: dir,
             started: Instant::now(),
-            options: options.clone(),
+            options,
             state: Mutex::new(JobState {
                 result: None,
                 phase: "queued",
@@ -161,8 +169,16 @@ impl Jobs {
             ensure!(entries.len() < 132, "Job storage is full");
             entries.insert(job.id.clone(), job.clone());
         }
-        self.emit(&job, "running", first);
-        let timeout = options.timeout_sec.min(self.config.max_timeout);
+        Ok(job)
+    }
+
+    /// Runs `work` detached from the call that started it, holding `permit`.
+    fn spawn(
+        self: &Arc<Self>,
+        job: &Arc<Job>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        work: impl std::future::Future<Output = Result<Value>> + Send + 'static,
+    ) {
         let owner = self.clone();
         let running = job.clone();
         tokio::spawn(async move {
@@ -175,10 +191,7 @@ impl Jobs {
                     heartbeat_owner.emit(&heartbeat_job, "running", json!({}));
                 }
             });
-            let result = owner
-                .execute(&running, prompt, timeout, open)
-                .await
-                .unwrap_or_else(artifacts::error);
+            let result = work.await.unwrap_or_else(artifacts::error);
             heartbeat.abort();
             let status = if result["isError"].as_bool() == Some(true) {
                 "failed"
@@ -193,7 +206,43 @@ impl Jobs {
             owner.emit(&running, status, json!({}));
             running.notify.notify_waiters();
         });
-        Ok(job)
+    }
+
+    /// Service defaults with the caller's allowed overrides, validated.
+    fn options(&self, args: &Value) -> Result<crate::task_options::TaskOptions> {
+        let mut values = serde_json::to_value(&self.config.defaults)?;
+        for key in [
+            "model",
+            "reasoning_effort",
+            "timeout_sec",
+            "count",
+            "size",
+            "quality",
+            "output_format",
+            "output_compression",
+            "background",
+            "target_file_kb",
+        ] {
+            if let Some(value) = args.get(key) {
+                values[key] = value.clone();
+            }
+        }
+        if args.get("model").is_none() && !self.config.model.is_empty() {
+            values["model"] = json!(self.config.model);
+        }
+        if args.get("timeout_sec").is_none() && std::env::var_os("CODEX_TASK_DEFAULTS").is_none() {
+            values["timeout_sec"] = json!(self.config.timeout.min(self.config.max_timeout));
+        }
+        if let Some(n) = args["timeout_sec"].as_f64() {
+            values["timeout_sec"] = json!(if n > 0.0 {
+                n.clamp(1.0, self.config.max_timeout.min(1800) as f64) as u64
+            } else {
+                self.config.defaults.timeout_sec
+            });
+        }
+        let options: crate::task_options::TaskOptions = serde_json::from_value(values)?;
+        options.validate()?;
+        Ok(options)
     }
 
     async fn execute(
@@ -373,7 +422,7 @@ impl Jobs {
         runs.sort_by_key(|(index, _)| *index);
         Ok(Combined::new(runs, failures))
     }
-    fn progress(&self, job: &Job, event: Value) {
+    pub(crate) fn progress(&self, job: &Job, event: Value) {
         if let Some(phase) = event["legacyPhase"].as_str() {
             // Retain compatibility with older CLI stderr markers.
             let phase = match phase {
@@ -407,7 +456,7 @@ impl Jobs {
             );
         }
     }
-    fn phase(&self, job: &Job, phase: &'static str) {
+    pub(crate) fn phase(&self, job: &Job, phase: &'static str) {
         {
             let mut state = job.state.lock().unwrap();
             state.last_event = Instant::now();
