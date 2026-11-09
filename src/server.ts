@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { config } from "./config.js";
-import { readArtifact, imageMimeType, uriToPath } from "./artifacts.js";
+import { fileUri, readArtifact, imageMimeType, uriToPath } from "./artifacts.js";
 import {
   clampWait,
   getJob,
@@ -29,7 +29,6 @@ import { resolveWorkspace } from "./workspace.js";
 import { describeProjects, resolveProject, validateRef } from "./projects.js";
 import { executeCodingTask, type CodingTaskResult } from "./coding.js";
 import { assertSafeModel } from "./codex.js";
-import { fileUri } from "./artifacts.js";
 
 type Content =
   | { type: "text"; text: string }

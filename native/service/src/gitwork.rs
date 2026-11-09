@@ -261,10 +261,13 @@ pub async fn collect_patch(
         "--no-textconv",
     ];
     // create_new: a fresh file, never one planted in advance or a link elsewhere.
-    let file = std::fs::OpenOptions::new()
+    let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(patch_file)?;
+        .open(patch_file)
+        .await?
+        .into_std()
+        .await;
     let mut list: Vec<OsString> = diff.iter().map(OsString::from).collect();
     list.extend(args([&"--binary", &base, &"--"]));
     git_ok(config, dir, &list, "Creating the patch", Some(file)).await?;

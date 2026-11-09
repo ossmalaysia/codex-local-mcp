@@ -2,6 +2,7 @@
 // Only the separate native fixture executes. No AI model or live account is used.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
+import { statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -79,7 +80,11 @@ try {
   // clone of it for the user's checkout. Mirrors test/coding-task.test.ts.
   {
     const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-native-git-'));
-    const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    // Resolved to an absolute path from absolute PATH entries, like the services do.
+    const gitName = process.platform === 'win32' ? 'git.exe' : 'git';
+    const gitBin = (process.env.PATH ?? '').split(path.delimiter).filter(d => path.isAbsolute(d)).map(d => path.join(d, gitName)).find(f => { try { return statSync(f).isFile(); } catch { return false; } });
+    assert.ok(gitBin, 'git is required for the codex_task tests');
+    const git = (cwd, ...args) => execFileSync(gitBin, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     const origin = path.join(scratch, 'origin.git'), seed = path.join(scratch, 'seed'), clone = path.join(scratch, 'clone');
     const marker = path.join(scratch, 'hook-ran');
     git(scratch, 'init', '-q', '--bare', origin); git(scratch, 'init', '-q', seed);

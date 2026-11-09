@@ -196,7 +196,11 @@ pub async fn execute(
         .await?;
         drop(permit);
         jobs.phase(job, "collecting_files");
-        let summary = workspace::read(&config.root, &last_message, 1_000_000)
+        let root = config.root.clone();
+        let file = last_message.clone();
+        // Confined reads use blocking file APIs; keep them off the async workers.
+        let summary = tokio::task::spawn_blocking(move || workspace::read(&root, &file, 1_000_000))
+            .await?
             .ok()
             .map(|(data, _)| String::from_utf8_lossy(&data).trim().to_owned())
             .filter(|s| !s.is_empty())
@@ -240,7 +244,7 @@ pub async fn execute(
                 .await?
                 .trim()
                 .to_owned();
-            report.patch_bytes = std::fs::metadata(&patch_file)?.len();
+            report.patch_bytes = tokio::fs::metadata(&patch_file).await?.len();
             report.patch_file = Some(patch_file.clone());
             if !input.return_patch {
                 report.patch_note = "not inlined because return is \"summary\"".into();
@@ -251,7 +255,10 @@ pub async fn execute(
                 );
             } else {
                 // A UTF-8 file of N bytes decodes to at most N characters.
-                let (data, _) = workspace::read(&config.root, &patch_file, config.max_patch)?;
+                let (root, file, max) = (config.root.clone(), patch_file.clone(), config.max_patch);
+                let (data, _) =
+                    tokio::task::spawn_blocking(move || workspace::read(&root, &file, max))
+                        .await??;
                 report.patch = Some(String::from_utf8_lossy(&data).into_owned());
             }
         }

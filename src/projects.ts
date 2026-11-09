@@ -51,7 +51,7 @@ export function parseProjects(raw: string): ProjectConfig {
   }
   const projects = new Map<string, Project>();
   // Sorted, here and for checks, so both implementations list them identically.
-  for (const [name, entry] of Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+  for (const [name, entry] of Object.entries(value).sort(byKey)) {
     const fail = (why: string): ProjectConfig => ({
       ok: false,
       error: `CODEX_PROJECTS: project "${name.slice(0, 64)}" ${why}`,
@@ -70,7 +70,7 @@ export function parseProjects(raw: string): ProjectConfig {
     const checks: Record<string, string> = {};
     if (entry.checks !== undefined) {
       if (!isObject(entry.checks)) return fail("has \"checks\" that is not an object of commands.");
-      for (const [check, command] of Object.entries(entry.checks).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      for (const [check, command] of Object.entries(entry.checks).sort(byKey)) {
         if (!validName(check)) return fail(`has an invalid check name "${check.slice(0, 64)}".`);
         if (typeof command !== "string" || !command.trim()) {
           return fail(`has check "${check}" whose command is not a non-empty string.`);
@@ -86,6 +86,12 @@ export function parseProjects(raw: string): ProjectConfig {
     });
   }
   return { ok: true, projects };
+}
+
+/** Code-unit order, which matches the Rust service's byte order for these ASCII names. */
+function byKey([a]: [string, unknown], [b]: [string, unknown]): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
