@@ -31,6 +31,10 @@ vulnerability; please report it.
 | Prompt text cannot break out into the host shell | The prompt is passed to Codex on **stdin**, never as a command-line argument |
 | A hung or runaway Codex run cannot persist | Timeout kills the whole process tree (`taskkill /T` on Windows, process group kill elsewhere) |
 | Tool output cannot exhaust the caller's context | Output is capped; oversized images are downscaled into previews |
+| `codex_task` runs no repository code outside the Codex sandbox | The server itself only runs git: `fetch`, `rev-parse`, `worktree add/remove/prune`, `add -A` and `diff`. Every git call disables hooks (`core.hooksPath` points beneath the git executable, where no hook can exist), turns off `core.fsmonitor`, and diffs with `--no-ext-diff --no-textconv`. git is an absolute executable, spawned without a shell |
+| `codex_task` setup and check commands run only inside the Codex sandbox | They are caller-chosen repository code, so the server never executes them. They are appended to the task (`First run: ...`, `Before finishing, run these checks and report pass/fail: ...`) and Codex runs them under its own sandbox. Results are labelled "reported by Codex (not independently verified)" |
+| `codex_task` cannot fetch arbitrary refspecs or reach local paths | Projects are only those in `CODEX_PROJECTS`. `ref` must match `^[A-Za-z0-9._/-]{1,200}$`, with no leading `-` and no `..`, so it cannot be an option, a range or a refspec that writes local refs. Project and check names match `^[A-Za-z0-9._-]{1,64}$` and cannot be `.` or `..`. `codex_projects` never shows local paths |
+| `codex_task` gives Codex no git credentials and pushes nothing | The fetch runs in the server with the user's credentials before Codex starts, and Codex works in a detached worktree. Reads are limited only by the selected sandbox: `workspace-write` permits reading the host, `isolated` does not |
 
 ### Out of scope
 
@@ -46,6 +50,16 @@ These are inherent to what the tool is, not bugs:
   Treat any workspace that has touched untrusted input as untrusted.
 - **The sandbox is the Codex CLI's sandbox.** This project configures it; it does not
   implement it. Sandbox escapes belong to the upstream Codex CLI.
+- **`codex_task` check results are not verified.** Codex is asked to run the checks and report
+  them, so a result can be wrong. Treat the returned patch like any contribution and run your
+  own CI on it. Running checks through the Codex CLI's standalone `codex sandbox` command was
+  considered, but its behaviour with the Windows MXC and elevated backends and the `isolated`
+  permission profile could not be verified, so the server does not run repository code itself.
+- **`codex_task` shares a package cache per project.** `CODEX_MCP_ROOT/.cache/<project>` is
+  writable by every task on that project, so one task can influence what a later task installs.
+- **`codex_task` worktrees live under the workspace root.** A `codex_run` call whose workspace
+  is `tasks/<project>` can see and change them while a task runs. Every client is the same
+  owner (see the deployment guidance), so this is not a boundary between callers.
 - **Secrets in the environment are visible to Codex.** Anything you put in the server's `env`
   (for example `OPENAI_API_KEY`) is inherited by the code Codex runs. Pass only what is needed.
 

@@ -1,12 +1,15 @@
 mod activity;
 mod artifacts;
 mod auth;
+mod coding;
 mod config;
 mod generated;
+mod gitwork;
 mod http;
 mod jobs;
 mod probe;
 mod process;
+mod projects;
 mod protocol;
 #[path = "../../task_options.rs"]
 mod task_options;

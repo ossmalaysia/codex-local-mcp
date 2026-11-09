@@ -98,6 +98,19 @@ pub async fn login(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Per-run adjustments used by codex_task. The default changes nothing.
+#[derive(Default)]
+pub struct Extra {
+    /// Codex may read its workspace but write nothing (review mode).
+    pub read_only: bool,
+    /// Folders Codex may write besides its workspace, such as a package cache.
+    pub writable: Vec<String>,
+    /// Environment for Codex and the commands it runs.
+    pub env: Vec<(String, String)>,
+    /// Codex writes its final message here, so nothing parses its log.
+    pub last_message: Option<std::path::PathBuf>,
+}
+
 pub async fn run(
     config: &Config,
     workspace: &Path,
@@ -106,6 +119,30 @@ pub async fn run(
     options: &crate::task_options::TaskOptions,
     cancel: CancellationToken,
     report: Arc<dyn Fn(Value) + Send + Sync>,
+) -> Result<Output> {
+    run_with(
+        config,
+        workspace,
+        prompt,
+        timeout,
+        options,
+        cancel,
+        report,
+        &Extra::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with(
+    config: &Config,
+    workspace: &Path,
+    prompt: String,
+    timeout: u64,
+    options: &crate::task_options::TaskOptions,
+    cancel: CancellationToken,
+    report: Arc<dyn Fn(Value) + Send + Sync>,
+    extra: &Extra,
 ) -> Result<Output> {
     ensure!(
         options.model.len() <= 128
@@ -120,9 +157,15 @@ pub async fn run(
     cmd.arg("exec")
         .arg("--cd")
         .arg(workspace)
-        .args(config.sandbox_args())
+        .args(config.sandbox_args_with(extra.read_only, &extra.writable))
         .arg("--skip-git-repo-check");
     cmd.arg("--json");
+    if let Some(file) = &extra.last_message {
+        cmd.arg("--output-last-message").arg(file);
+    }
+    for (key, value) in &extra.env {
+        cmd.env(key, value);
+    }
     if !options.model.is_empty() {
         cmd.args(["--model", &options.model]);
     }

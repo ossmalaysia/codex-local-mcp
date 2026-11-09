@@ -26,6 +26,10 @@ import {
   type TaskResult,
 } from "./task.js";
 import { resolveWorkspace } from "./workspace.js";
+import { describeProjects, resolveProject, validateRef } from "./projects.js";
+import { executeCodingTask, type CodingTaskResult } from "./coding.js";
+import { assertSafeModel } from "./codex.js";
+import { fileUri } from "./artifacts.js";
 
 type Content =
   | { type: "text"; text: string }
@@ -164,6 +168,62 @@ function formatTask(result: TaskResult) {
   }
 
   return { content, isError: taskFailed(result) };
+}
+
+/**
+ * codex_task's result. The header lines are stable and machine-readable, so a
+ * calling agent can pick out the base commit and apply the patch on top of it.
+ */
+function formatCodingTask(result: CodingTaskResult): ToolResult {
+  // Same rule as taskFailed: a timeout, a signal or any non-zero exit.
+  const failed = result.timedOut || Boolean(result.signal) || result.exitCode !== 0;
+  const header = [
+    `status: ${failed ? "failed" : "completed"}`,
+    `job_id: ${result.jobId}`,
+    `project: ${result.project}`,
+    `ref: ${result.ref}`,
+    `base: ${result.base}`,
+    `exit code: ${result.exitCode ?? "n/a"}${result.signal ? ` (killed by ${result.signal})` : ""}${
+      result.timedOut ? " (TIMED OUT - process killed)" : ""
+    }`,
+    `duration: ${(result.durationMs / 1000).toFixed(1)}s`,
+  ].join("\n");
+
+  const review = result.mode === "review";
+  const empty = !review && result.patchBytes === 0;
+  const diffstat = review ? "(review mode: no patch)" : empty ? "(no changes)" : result.diffstat;
+  const checks = result.checks.length
+    ? result.checks.map((c) => `- ${c.name}: ${c.command}`).join("\n") +
+      "\nResults are reported by Codex in the summary (not independently verified)."
+    : "(none requested)";
+  let patch: string;
+  if (review) patch = "(review mode: no patch)";
+  else if (empty) patch = "(no changes)";
+  else if (result.patch !== undefined) patch = result.patch;
+  else
+    patch =
+      `Saved to ${result.patchFile} (${result.patchBytes} bytes), ${result.patchNote}. ` +
+      "Fetch it through the resource link below, or with codex_read_artifact.";
+
+  const content: Content[] = [
+    {
+      type: "text",
+      text:
+        `${header}\n\n--- summary ---\n${result.summary}\n\n--- diffstat ---\n${diffstat}` +
+        `\n\n--- checks ---\n${checks}\n\n--- patch ---\n${patch}`,
+    },
+  ];
+  // The saved patch stays reachable whether or not it was inlined.
+  if (result.patchFile && !empty) {
+    content.push({
+      type: "resource_link",
+      uri: fileUri(result.patchFile),
+      name: `${result.jobId}.patch`,
+      mimeType: "text/x-diff",
+      description: `${result.patchBytes} bytes; apply with git apply on top of ${result.base}`,
+    });
+  }
+  return { content, isError: failed };
 }
 
 /**
@@ -536,6 +596,111 @@ export function createServer(): McpServer {
           content.push({ type: "text", text: file.text ?? "" });
         }
         return { content };
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "codex_projects",
+    {
+      title: "List the local projects codex_task can work on",
+      description:
+        "List the git projects configured on this computer for codex_task, with the check names " +
+        "each one defines and whether it has a setup command. Local paths are not shown.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        return { content: [{ type: "text", text: describeProjects() }] };
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "codex_task",
+    {
+      title: "Delegate a coding task on a local git project to Codex",
+      description:
+        "Have the local Codex CLI work on a configured git project (see codex_projects). Push your " +
+        "branch first: the server fetches `ref` from the project's origin into a fresh worktree of " +
+        "the local clone, Codex works there inside its sandbox, and the result is Codex's final " +
+        "message plus a git patch against the `base:` commit, to apply with `git apply`. Nothing " +
+        "is pushed. If Codex takes longer than wait_sec, this returns status: running and a " +
+        "job_id; call codex_job_result with it to collect the result.",
+      inputSchema: {
+        task: z
+          .string()
+          .min(1)
+          .describe("The task for Codex, written as you would to a developer. Passed through as written."),
+        project: z.string().min(1).describe("Project name from codex_projects."),
+        ref: z
+          .string()
+          .min(1)
+          .describe("Branch, tag or commit to fetch from the project's origin and work on."),
+        mode: z
+          .enum(["edit", "review"])
+          .optional()
+          .describe('"edit" (default) changes files and returns a patch; "review" is read-only and returns no patch.'),
+        acceptance: z
+          .string()
+          .optional()
+          .describe('Acceptance criteria, appended to the task under a "Done when:" line.'),
+        checks: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Names of the project's configured checks for Codex to run before finishing. Codex runs " +
+              "them inside its sandbox and reports the results; they are not independently verified.",
+          ),
+        return: z
+          .enum(["patch", "summary"])
+          .optional()
+          .describe('"patch" (default) inlines the patch when small enough; "summary" only links it.'),
+        model: z.string().optional().describe("Override the Codex model for this task."),
+        reasoning_effort: z
+          .enum(["default", "none", "minimal", "low", "medium", "high", "xhigh"])
+          .optional()
+          .describe("Model reasoning effort. Supported values depend on the model."),
+        timeout_sec: z
+          .number()
+          .optional()
+          .describe(`Seconds before Codex is killed. Default ${config.defaultTimeoutSec}.`),
+        wait_sec: waitSecSchema,
+      },
+    },
+    async (args, extra) => {
+      try {
+        // Everything is checked here, so a bad request never becomes a job.
+        const checks = [...new Set(args.checks ?? [])];
+        const project = resolveProject(args.project, checks);
+        validateRef(args.ref);
+        assertSafeModel(args.model);
+        const job = startJob<ToolResult>(
+          "codex_task",
+          path.join(config.root, "tasks", project.name),
+          async (job) =>
+            formatCodingTask(
+              await executeCodingTask({
+                jobId: job.id,
+                project,
+                ref: args.ref,
+                task: args.task,
+                mode: args.mode ?? "edit",
+                acceptance: args.acceptance,
+                checks,
+                returnPatch: (args.return ?? "patch") === "patch",
+                model: args.model,
+                reasoning_effort: args.reasoning_effort,
+                timeout_sec: args.timeout_sec,
+                onProgress: (progress) => reportJob(job, progress),
+              }),
+            ),
+        );
+        return await respondWithJob(job, clampWait(args.wait_sec), extra.signal);
       } catch (err) {
         return errorResult(err);
       }

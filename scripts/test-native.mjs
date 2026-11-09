@@ -1,7 +1,7 @@
 // Exercise the actual Rust executable with the TypeScript MCP client and Chromium.
 // Only the separate native fixture executes. No AI model or live account is used.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -74,6 +74,86 @@ try {
   assert.match(activity, /running_command/); assert.match(activity, /writing_files/); assert.ok(!activity.includes('private-prompt-sentinel')); assert.ok(!activity.includes(password)); assert.ok(!activity.includes('private-command-sentinel')); assert.match(activity, /"steps":3/); assert.match(activity, /"input_tokens":100/);
   await local.close();
   console.log('Native stdio passed: contract, detached jobs, polling, artifacts, images, parallel images, path denial, timeout, failure, child secrets, and private activity.');
+
+  // codex_task, hermetically: a local bare repository stands in for GitHub and a
+  // clone of it for the user's checkout. Mirrors test/coding-task.test.ts.
+  {
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-native-git-'));
+    const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const origin = path.join(scratch, 'origin.git'), seed = path.join(scratch, 'seed'), clone = path.join(scratch, 'clone');
+    const marker = path.join(scratch, 'hook-ran');
+    git(scratch, 'init', '-q', '--bare', origin); git(scratch, 'init', '-q', seed);
+    await fs.writeFile(path.join(seed, 'README.md'), '# Demo\n');
+    // Tracked hooks that the clone points core.hooksPath at, as husky does.
+    await fs.mkdir(path.join(seed, '.hooks'));
+    for (const hook of ['post-checkout', 'reference-transaction']) await fs.writeFile(path.join(seed, '.hooks', hook), `#!/bin/sh\necho "$0" >> "${marker.replace(/\\/g, '/')}"\n`, { mode: 0o755 });
+    git(seed, 'add', '-A'); git(seed, 'update-index', '--chmod=+x', '.hooks/post-checkout', '.hooks/reference-transaction');
+    git(seed, 'commit', '-q', '-m', 'initial'); git(seed, 'push', '-q', origin, 'HEAD:refs/heads/main');
+    const base = git(seed, 'rev-parse', 'HEAD').trim();
+    git(scratch, 'clone', '-q', origin, clone); git(clone, 'config', 'core.hooksPath', '.hooks');
+    const applyClean = async (patch) => {
+      const dir = await fs.mkdtemp(path.join(scratch, 'apply-'));
+      git(scratch, 'clone', '-q', origin, dir);
+      const file = `${dir}.patch`; await fs.writeFile(file, patch);
+      git(dir, 'apply', '--binary', file);
+      return dir;
+    };
+    const taskEnv = { ...env, CODEX_WAIT_SEC: '20', CODEX_MAX_PATCH_CHARS: '20000', CODEX_PROJECTS: JSON.stringify({ demo: { path: clone, setup: 'npm ci', checks: { test: 'npm test', lint: 'npm run lint' } } }) };
+    const tasks = makeClient(); clients.push(tasks);
+    await tasks.connect(new StdioClientTransport({ command: bin, env: taskEnv, stderr: 'pipe' }));
+    const text = r => r.content.map(c => c.text ?? '').join('\n');
+    const field = (r, key) => new RegExp(`^${key}: (.*)$`, 'm').exec(text(r))?.[1];
+    const section = (r, name) => { const t = r.content[0].text; const body = t.slice(t.indexOf(`--- ${name} ---\n`) + name.length + 9); const next = body.search(/\n\n--- [a-z]+ ---\n/); return next < 0 ? body : body.slice(0, next); };
+
+    const listed = text(await tasks.callTool({ name: 'codex_projects', arguments: {} }));
+    assert.match(listed, /project: demo\nchecks: lint, test\nsetup: defined/); assert.ok(!listed.includes(clone));
+
+    const edit = await tasks.callTool({ name: 'codex_task', arguments: { project: 'demo', ref: 'main', task: 'EDIT_REPO please', acceptance: 'tests pass', checks: ['test'] } });
+    assert.equal(edit.isError, false, text(edit));
+    assert.equal(field(edit, 'status'), 'completed'); assert.equal(field(edit, 'base'), base); assert.equal(field(edit, 'ref'), 'main'); assert.equal(field(edit, 'exit code'), '0');
+    assert.match(section(edit, 'summary'), /sandbox: workspace-write\nnpm cache: .*\.cache.demo.npm\nwritable roots: .*\.cache.demo/);
+    assert.match(section(edit, 'checks'), /- test: npm test\nResults are reported by Codex in the summary \(not independently verified\)\./);
+    const applied = await applyClean(section(edit, 'patch'));
+    assert.equal(await fs.readFile(path.join(applied, 'README.md'), 'utf8'), '# Demo\nEdited by fake codex.\n');
+    assert.equal(await fs.readFile(path.join(applied, 'src', 'added.txt'), 'utf8'), 'a new untracked file\n');
+    assert.equal(await fs.readFile(path.join(applied, 'notes.txt'), 'utf8'), 'prompt: EDIT_REPO please\n\nDone when:\ntests pass\n\nFirst run: npm ci\n\nBefore finishing, run these checks and report pass/fail:\n- test: npm test\n');
+    const id = field(edit, 'job_id');
+    await assert.rejects(fs.stat(path.join(root, 'tasks', 'demo', id)));
+    await fs.stat(path.join(root, 'tasks', 'demo', `${id}.patch`)); await fs.stat(path.join(root, 'tasks', 'demo', `${id}.last.md`));
+    assert.ok(!git(clone, 'worktree', 'list', '--porcelain').includes(id));
+    await assert.rejects(fs.stat(marker), 'A repository hook ran outside the sandbox');
+
+    const big = await tasks.callTool({ name: 'codex_task', arguments: { project: 'demo', ref: 'main', task: 'BIGPATCH:40000' } });
+    assert.equal(big.isError, false, text(big));
+    assert.match(section(big, 'patch'), /^Saved to .*\.patch \(\d+ bytes\), not inlined: .*CODEX_MAX_PATCH_CHARS/);
+    const link = big.content.find(c => c.type === 'resource_link');
+    const linked = (await tasks.readResource({ uri: link.uri })).contents[0].text;
+    assert.ok((await fs.stat(path.join(await applyClean(linked), 'big.txt'))).size >= 40000);
+
+    const review = await tasks.callTool({ name: 'codex_task', arguments: { project: 'demo', ref: 'main', task: 'EDIT_REPO review', mode: 'review' } });
+    assert.equal(review.isError, false, text(review));
+    assert.match(section(review, 'summary'), /sandbox: read-only\n.*\nwritable roots: none/);
+    assert.equal(section(review, 'patch'), '(review mode: no patch)'); assert.ok(!review.content.some(c => c.type === 'resource_link'));
+
+    const missing = await tasks.callTool({ name: 'codex_task', arguments: { project: 'demo', ref: 'no-such-branch', task: 'EDIT_REPO' } });
+    assert.equal(missing.isError, true); assert.match(text(missing), /Could not fetch "no-such-branch" from origin/);
+    for (const [args, message] of [[{ ref: '-uupload-pack=evil' }, /Invalid ref/], [{ ref: 'main..x' }, /Invalid ref/], [{ project: 'nope' }, /Unknown project "nope"\. Configured projects: demo/], [{ checks: ['deploy'] }, /Unknown check "deploy".*Configured checks: lint, test/], [{ mode: 'write' }, /mode/], [{ checks: 'test' }, /checks/]]) {
+      const bad = await tasks.callTool({ name: 'codex_task', arguments: { project: 'demo', ref: 'main', task: 'EDIT_REPO', ...args } });
+      assert.equal(bad.isError, true); assert.match(text(bad), message); assert.ok(!text(bad).includes('job_id'));
+    }
+    assert.equal(git(clone, 'worktree', 'list', '--porcelain').match(/^worktree /gm).length, 1);
+    await tasks.close();
+
+    // A broken CODEX_PROJECTS is reported by the tools, not fatal to the service.
+    const broken = makeClient(); clients.push(broken);
+    await broken.connect(new StdioClientTransport({ command: bin, env: { ...env, CODEX_PROJECTS: '{not json' }, stderr: 'pipe' }));
+    const brokenList = await broken.callTool({ name: 'codex_projects', arguments: {} });
+    assert.equal(brokenList.isError, true); assert.match(text(brokenList), /CODEX_PROJECTS is not valid JSON/);
+    const brokenTask = await broken.callTool({ name: 'codex_task', arguments: { project: 'demo', ref: 'main', task: 'x' } });
+    assert.equal(brokenTask.isError, true); assert.match(text(brokenTask), /CODEX_PROJECTS is not valid JSON/);
+    await broken.close();
+    console.log('Native codex_task passed: projects, patch round trip, untracked files, hooks disabled, linked large patch, review mode, fetch failure, request validation, and invalid configuration.');
+  }
 
   // Reserve an unused local port. The child is managed and closes on stdin EOF.
   const reservation = createServer(); await listen(reservation); const port = reservation.address().port; await close(reservation);

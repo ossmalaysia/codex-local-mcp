@@ -43,6 +43,9 @@ One job per module. Keep it that way.
 | `src/open.ts` | Opening a file in the OS viewer. |
 | `src/task.ts` | Orchestration: prepare, snapshot, run, diff, report. |
 | `src/jobs.ts` | Running tasks detached from the call that started them, and polling for results. |
+| `src/projects.ts` | Parsing and validating `CODEX_PROJECTS`, refs and check names for `codex_task`. |
+| `src/gitwork.ts` | git for `codex_task`: fetch into a worktree, collect the patch, remove the worktree. Hooks off. |
+| `src/coding.ts` | Orchestrating one `codex_task`: worktree, Codex run, patch, cleanup. |
 | `src/config.ts` | Environment configuration, read once at import. |
 | `ui/image-viewer.ts` | The in-chat image view (an MCP App), bundled by `scripts/build-ui.mjs` into `dist/ui/image-viewer.html`. |
 | `ui/parse.ts` | Pure parsing of tool results for the view. Unit-tested; no DOM. |
@@ -103,6 +106,17 @@ in `SECURITY.md`.
   resources match what worked before. Do not flip the default without re-testing there.
 - **The view must stay self-contained.** Hosts render it with a policy that blocks the network,
   so the bundle inlines all script and style; it calls tools through the host, never `fetch`.
+- **`codex_task` never runs repository code outside the Codex sandbox.** The server runs only
+  git, with hooks disabled (`core.hooksPath` beneath the git executable), `core.fsmonitor=false`
+  and `--no-ext-diff --no-textconv`. Project `setup` and `checks` are appended to the task text
+  for Codex to run inside its sandbox, and their results are labelled "reported by Codex (not
+  independently verified)". Do not add a code path that executes them in the server; the
+  Codex CLI's `codex sandbox` command was not verifiable on the Windows backends.
+- **`codex_task` validates the project, ref and checks before starting a job**, and the ref can
+  never be an option, a range or a refspec. `codex_projects` never reveals local paths.
+- **The TypeScript and Rust services expose the same `codex_task` contract.** Change both, and
+  regenerate `native/service/contract.json`; `scripts/test-native.mjs` and
+  `test/coding-task.test.ts` check the same behaviour.
 - **Resource reads honour the same root confinement as the tools.** `resources/read` goes
   through `readArtifact`, so a path outside `CODEX_MCP_ROOT` is refused.
 

@@ -35,7 +35,8 @@ fn validate(name: &str, args: &Value) -> anyhow::Result<()> {
             key.as_str().unwrap()
         );
     }
-    for (key, rule) in schema["properties"].as_object().unwrap() {
+    let empty = serde_json::Map::new();
+    for (key, rule) in schema["properties"].as_object().unwrap_or(&empty) {
         let Some(value) = args.get(key) else {
             continue;
         };
@@ -46,6 +47,11 @@ fn validate(name: &str, args: &Value) -> anyhow::Result<()> {
             "number" => value.is_number(),
             "integer" => value.as_f64().is_some_and(|n| n.fract() == 0.0),
             "boolean" => value.is_boolean(),
+            "array" => value.as_array().is_some_and(|items| {
+                items
+                    .iter()
+                    .all(|i| rule["items"]["type"] == "string" && i.is_string())
+            }),
             _ => false,
         };
         anyhow::ensure!(valid, "Invalid type or value for {key}");
@@ -134,6 +140,8 @@ impl ServerHandler for Protocol {
             "codex_generate_image",
             "codex_job_result",
             "codex_read_artifact",
+            "codex_projects",
+            "codex_task",
         ]
         .contains(&name)
         {
@@ -150,6 +158,14 @@ impl ServerHandler for Protocol {
         let wait = args["wait_sec"].as_f64();
         let result = match name {
             "codex_run" | "codex_generate_image" => match self.jobs.start(name, args) {
+                Ok(job) => self.jobs.result(job, wait).await,
+                Err(e) => artifacts::error(e),
+            },
+            "codex_projects" => match crate::projects::describe(&self.jobs.config.projects) {
+                Ok(text) => json!({"content":[artifacts::text(text)]}),
+                Err(e) => artifacts::error(e),
+            },
+            "codex_task" => match self.jobs.start_task(args) {
                 Ok(job) => self.jobs.result(job, wait).await,
                 Err(e) => artifacts::error(e),
             },

@@ -28,6 +28,53 @@ pub struct Config {
     /// The user's opt-in to show submitted prompts in desktop activity.
     pub activity_prompts: bool,
     pub defaults: crate::task_options::TaskOptions,
+    /// codex_task projects. An invalid CODEX_PROJECTS is kept as its error, so
+    /// it is reported by the tools that need it instead of stopping the service.
+    pub projects: Result<crate::projects::Projects, String>,
+    /// Absolute git executable, or why there is none; checked per codex_task.
+    pub git: Result<PathBuf, String>,
+    /// A patch up to this many characters is inlined; a larger one is linked.
+    pub max_patch: usize,
+}
+
+/// Resolve an executable to an absolute path once, from absolute PATH entries
+/// only: a relative entry would resolve against a directory Codex can write.
+fn resolve_executable(raw: &str, missing: &str) -> Result<PathBuf> {
+    if Path::new(raw).is_absolute() {
+        return Ok(PathBuf::from(raw).canonicalize()?);
+    }
+    ensure!(
+        !raw.contains(['/', '\\']),
+        "Executable names must be absolute or bare"
+    );
+    Ok(env::split_paths(&env::var_os("PATH").unwrap_or_default())
+        .filter(|p| p.is_absolute())
+        .map(|p| p.join(raw))
+        .find(|p| p.is_file())
+        .ok_or_else(|| anyhow::anyhow!("{missing}"))?
+        .canonicalize()?)
+}
+
+/// git is spawned directly, never through a shell, so on Windows only a native
+/// .exe can run.
+fn git_bin() -> Result<PathBuf, String> {
+    let raw = value(
+        "CODEX_GIT_BIN",
+        if cfg!(windows) { "git.exe" } else { "git" },
+    );
+    let bin = resolve_executable(
+        &raw,
+        "Could not find git. Install git or set CODEX_GIT_BIN to its full path.",
+    )
+    .map_err(|e| format!("{e}"))?;
+    if cfg!(windows)
+        && bin
+            .extension()
+            .is_none_or(|e| !e.eq_ignore_ascii_case("exe"))
+    {
+        return Err("CODEX_GIT_BIN must be a native git.exe; shell launchers are refused".into());
+    }
+    Ok(bin)
 }
 
 pub fn value(key: &str, default: &str) -> String {
@@ -55,20 +102,7 @@ impl Config {
             "CODEX_BIN",
             if cfg!(windows) { "codex.exe" } else { "codex" },
         );
-        let bin = if Path::new(&raw).is_absolute() {
-            PathBuf::from(raw)
-        } else {
-            ensure!(
-                !raw.contains(['/', '\\']),
-                "CODEX_BIN must be absolute or a bare executable name"
-            );
-            env::split_paths(&env::var_os("PATH").unwrap_or_default())
-                .filter(|p| p.is_absolute())
-                .map(|p| p.join(&raw))
-                .find(|p| p.is_file())
-                .ok_or_else(|| anyhow::anyhow!("Set CODEX_BIN to the native Codex executable"))?
-        }
-        .canonicalize()?;
+        let bin = resolve_executable(&raw, "Set CODEX_BIN to the native Codex executable")?;
         if cfg!(windows)
             && bin
                 .extension()
@@ -114,20 +148,41 @@ impl Config {
             files: number("CODEX_MAX_REPORTED_FILES", 200, 1000) as usize,
             activity: value("CODEX_MCP_ACTIVITY", "") == "1",
             activity_prompts: value("CODEX_MCP_ACTIVITY_PROMPTS", "") == "1",
+            projects: crate::projects::parse(&value("CODEX_PROJECTS", "")),
+            git: git_bin(),
+            max_patch: number("CODEX_MAX_PATCH_CHARS", 200_000, 50_000_000) as usize,
         })
     }
 
     pub fn sandbox_args(&self) -> Vec<String> {
+        self.sandbox_args_with(false, &[])
+    }
+
+    /// `read_only` keeps Codex from writing anything (codex_task review mode);
+    /// `writable` adds folders it may write besides its workspace, such as a
+    /// package cache.
+    pub fn sandbox_args_with(&self, read_only: bool, writable: &[String]) -> Vec<String> {
+        let toml_path = |p: &str| serde_json::to_string(&p.replace('\\', "/")).unwrap();
+        let writable = if read_only { &[][..] } else { writable };
         let mut args = vec!["-c".into(), "approval_policy=never".into()];
         if self.mode == "isolated" {
-            let mut fs = vec!["':minimal'='read'".into(), "':workspace_roots'={'.'='write','.git'='read','.agents'='read','.codex'='read','.aws'='read'}".into(), "':tmpdir'='deny'".into(), "':slash_tmp'='deny'".into()];
-            for (path, access) in [(&self.runtime, "read"), (&self.private, "deny")] {
-                if !path.is_empty() {
-                    fs.push(format!(
-                        "{}='{access}'",
-                        serde_json::to_string(&path.replace('\\', "/")).unwrap()
-                    ));
-                }
+            let workspace = if read_only { "read" } else { "write" };
+            let mut fs = vec![
+                "':minimal'='read'".into(),
+                format!(
+                    "':workspace_roots'={{'.'='{workspace}','.git'='read','.agents'='read','.codex'='read','.aws'='read'}}"
+                ),
+                "':tmpdir'='deny'".into(),
+                "':slash_tmp'='deny'".into(),
+            ];
+            if !self.runtime.is_empty() {
+                fs.push(format!("{}='read'", toml_path(&self.runtime)));
+            }
+            for root in writable {
+                fs.push(format!("{}='write'", toml_path(root)));
+            }
+            if !self.private.is_empty() {
+                fs.push(format!("{}='deny'", toml_path(&self.private)));
             }
             for setting in ["default_permissions=codex_mcp_isolated".into(), format!("permissions.codex_mcp_isolated.filesystem={{{}}}", fs.join(",")), "shell_environment_policy.set={NODE_OPTIONS='--preserve-symlinks --preserve-symlinks-main'}".into(), format!("permissions.codex_mcp_isolated.network.enabled={}", self.network)] {
                 args.extend(["-c".into(), setting]);
@@ -135,10 +190,24 @@ impl Config {
         } else {
             args.extend([
                 "--sandbox".into(),
-                self.mode.clone(),
+                if read_only {
+                    "read-only".into()
+                } else {
+                    self.mode.clone()
+                },
                 "-c".into(),
                 format!("sandbox_workspace_write.network_access={}", self.network),
             ]);
+            if !writable.is_empty() {
+                let roots: Vec<_> = writable.iter().map(|r| toml_path(r)).collect();
+                args.extend([
+                    "-c".into(),
+                    format!(
+                        "sandbox_workspace_write.writable_roots=[{}]",
+                        roots.join(",")
+                    ),
+                ]);
+            }
         }
         if cfg!(windows) && !self.backend.is_empty() {
             args.extend([
