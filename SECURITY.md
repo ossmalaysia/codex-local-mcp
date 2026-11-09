@@ -25,6 +25,7 @@ vulnerability; please report it.
 | A caller cannot read arbitrary files via `codex_read_artifact` or `resources/read` | Both go through `readArtifact()`, which refuses any path resolving outside the root |
 | The Codex executable cannot be substituted by workspace contents | `CODEX_BIN` is resolved to an absolute path at startup, relative entries are stripped from the child `PATH`, and the child's working directory is the root rather than the task workspace |
 | A failed helper process cannot take down the server | `taskkill` and the image viewer both handle the asynchronous `error` event |
+| Callers cannot choose a model outside `CODEX_ALLOWED_MODELS` | One shared check refuses an unlisted `model` before a job starts; a default model outside the list stops the server at startup |
 | Callers cannot start unbounded numbers of Codex processes | Tasks run as jobs that outlive their calls, so concurrent jobs are capped at `CODEX_MAX_RUNNING_JOBS` (default 4); further starts are refused |
 | The in-chat image view cannot run code from a result | It inserts text with `textContent`, builds image sources only for PNG, JPEG, GIF and WebP data, loads nothing from the network, and runs in the host's sandbox; it can only call this server's own tools, which keep their confinement |
 | Runaway output cannot exhaust server memory | Both streams are buffered head-and-tail with a fixed budget while draining |

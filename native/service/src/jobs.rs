@@ -89,6 +89,8 @@ impl Jobs {
         }
         let options: crate::task_options::TaskOptions = serde_json::from_value(values)?;
         options.validate()?;
+        // Before any slot, workspace or process: a refused model never runs.
+        crate::models::validate(&self.config.allowed_models, &options.model)?;
         // The caller's own text, not the service-added image instructions, is
         // what a user can improve. Sent once; the desktop keeps merged fields.
         let mut first = if self.config.activity_prompts {
@@ -615,6 +617,29 @@ mod tests {
         let control = prompt_preview(&"\u{1}".repeat(5000));
         assert!(serde_json::to_string(&control["prompt"]).unwrap().len() <= PROMPT_PREVIEW_JSON);
         assert_eq!(control["promptTruncated"], true);
+    }
+
+    #[test]
+    fn refuses_a_model_outside_the_allowlist_before_starting() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = Config::for_tests(root.path());
+        config.allowed_models = vec!["gpt-5-codex".into(), "gpt-5".into()];
+        let jobs = Jobs::new(Arc::new(config));
+        for action in ["codex_run", "codex_generate_image"] {
+            let error = jobs
+                .start(
+                    action,
+                    json!({"prompt":"hello","workspace":"refused","model":"gpt-4o"}),
+                )
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains("Model \"gpt-4o\" is not allowed"), "{error}");
+            assert!(error.contains("Allowed models: gpt-5-codex, gpt-5"));
+        }
+        // No job, workspace or Codex process was created.
+        assert!(jobs.entries.lock().unwrap().is_empty());
+        assert!(!root.path().join("refused").exists());
     }
 
     #[test]
