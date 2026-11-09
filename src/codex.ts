@@ -170,6 +170,24 @@ export function childEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * Add variables to a child environment. Windows names are case-insensitive, so
+ * an existing NPM_CONFIG_CACHE would otherwise sit beside our npm_config_cache
+ * as a second key, and the child would get whichever Windows picked first.
+ */
+export function withEnv(base: NodeJS.ProcessEnv, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env = { ...base };
+  for (const [key, value] of Object.entries(extra)) {
+    if (process.platform === "win32") {
+      for (const existing of Object.keys(env)) {
+        if (existing.toLowerCase() === key.toLowerCase()) delete env[existing];
+      }
+    }
+    env[key] = value;
+  }
+  return env;
+}
+
 /** Check configured credentials through the CLI, without reading its credential files. */
 export async function validateCodexLogin(): Promise<void> {
   if (!path.isAbsolute(config.codexBin))
@@ -287,7 +305,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
       windowsVerbatimArguments: useCmd,
       detached: !isWindows,
       windowsHide: true,
-      env: { ...childEnv(), ...opts.env },
+      env: withEnv(childEnv(), opts.env),
     });
 
     const stdout = new BoundedBuffer(config.maxOutputChars);

@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
-import { BoundedBuffer, childEnv, killTree } from "./codex.js";
+import { BoundedBuffer, childEnv, killTree, withEnv } from "./codex.js";
 import { assertInsideRoot } from "./workspace.js";
 
 /**
@@ -55,9 +55,8 @@ export function git(cwd: string, args: string[], toFile?: FileHandle): Promise<G
     );
   }
   return new Promise((resolve, reject) => {
-    const env = childEnv();
     // Never wait on an interactive credential prompt nobody can answer.
-    env.GIT_TERMINAL_PROMPT = "0";
+    const env = withEnv(childEnv(), { GIT_TERMINAL_PROMPT: "0" });
     const child = spawn(config.gitBin, [...gitBase(), "-C", cwd, ...args], {
       // Like Codex, never a task workspace: see childEnv and runCodex.
       cwd: config.root,
