@@ -24,7 +24,10 @@ if (manifest.service === 'rust') {
       command: fileURLToPath(new URL('./runtime/codex-mcp-service.exe', import.meta.url)),
       env: { ...process.env, CODEX_BIN: fileURLToPath(new URL('./runtime/codex/codex.exe', import.meta.url)), CODEX_MCP_ROOT: root, CODEX_MCP_TRANSPORT: 'stdio', CODEX_SANDBOX_MODE: 'workspace-write' },
     }));
-    if (native.getServerVersion()?.version !== manifest.version || (await native.listTools()).tools.length !== 4) throw new Error('Installed Rust service contract or version failed.');
+    // Checked by name, not count, so adding a tool does not break the installer check.
+    const tools = new Set((await native.listTools()).tools.map(t => t.name));
+    const required = ['codex_run', 'codex_generate_image', 'codex_job_result', 'codex_read_artifact', 'codex_job_cancel', 'codex_jobs_list'];
+    if (native.getServerVersion()?.version !== manifest.version || !required.every(name => tools.has(name))) throw new Error('Installed Rust service contract or version failed.');
     console.log(`Installed Rust service and version verified: ${manifest.version}. No AI model was called.`);
   } finally { await native.close(); fs.rmdirSync(root); }
 }

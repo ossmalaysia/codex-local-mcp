@@ -19,7 +19,7 @@ for (const [name, command, args] of [['typescript', process.execPath, [path.reso
     const start = performance.now();
     try {
       await client.connect(new StdioClientTransport({ command, args, env, stderr: 'pipe' }));
-      if ((await client.listTools()).tools.length !== 4) throw new Error('Missing tools');
+      if (!(await client.listTools()).tools.some(t => t.name === 'codex_run')) throw new Error('Missing tools');
       samples.push(performance.now() - start);
     } finally { await client.close(); }
   }
