@@ -24,6 +24,10 @@ let settings: Json = {},
   noticeTimer = 0,
   page = "workspace",
   running = false;
+// Saved coding projects, as the service last returned them. The editor works
+// on a draft and replaces an entry only when the project is saved.
+let projects: Json[] = [],
+  editing = -1;
 // The service rejects settings changes while the connection runs, so these
 // pages are locked instead of failing on save.
 const settingsPages = ["workspace", "accounts", "connection"];
@@ -48,6 +52,11 @@ function lockView() {
     const button = $<HTMLButtonElement>(id);
     if (!button.hasAttribute("aria-busy")) button.disabled = running;
   }
+  $("coding")
+    .querySelectorAll<HTMLButtonElement>("button")
+    .forEach((button) => {
+      if (!button.hasAttribute("aria-busy")) button.disabled = running;
+    });
 }
 function notice(text: string, error = false) {
   $("notice").textContent = text;
@@ -79,10 +88,13 @@ function show(name: string) {
 // Checks every field before anything reaches the service, so a bad value is
 // reported next to its field instead of as a backend error.
 function validate() {
+  modelsValidity();
   const fields = document.querySelectorAll<HTMLInputElement>(
     "main input, main select",
   );
   for (const field of fields) {
+    // The project editor checks its own fields when a project is saved.
+    if (field.closest("#project-editor")) continue;
     if (field.checkValidity()) continue;
     const page = field.closest<HTMLElement>(".page");
     if (page) show(page.id);
@@ -165,6 +177,12 @@ function apply(s: Json) {
   input("network").checked = !!s.network;
   input("show-prompts").checked = !!s.showPrompts;
   input("max-tasks").value = String(s.maxTasks ?? 4);
+  projects = (s.projects ?? []).map((p: Json) => ({
+    ...p,
+    checks: [...(p.checks ?? [])],
+  }));
+  renderProjects();
+  input("allowed-models").value = (s.allowedModels ?? []).join(", ");
   input("password").value = "";
   input("tunnel-token").value = "";
   $("password-state").textContent = s.passwordSaved
@@ -182,6 +200,208 @@ function apply(s: Json) {
   $("change-address").hidden = false;
   $("generate-password").classList.toggle("primary", !s.passwordSaved);
   tunnelView();
+}
+// Same rules as the service: names are `^[A-Za-z0-9._-]{1,64}$`, model IDs
+// `^[A-Za-z0-9._:/-]{1,128}$`. The desktop service checks them again.
+const namePattern = /^[A-Za-z0-9._-]{1,64}$/;
+const modelPattern = /^[A-Za-z0-9._:/-]{1,128}$/;
+function models() {
+  return input("allowed-models")
+    .value.split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+}
+function modelsValidity() {
+  const field = input("allowed-models");
+  const list = models();
+  const bad = list.find((m) => !modelPattern.test(m));
+  const model = input("task-model").value.trim();
+  let message = "";
+  if (bad)
+    message = `"${bad}" is not a valid model ID. Use letters, digits, and . _ : / -`;
+  else if (model && list.length && !list.includes(model))
+    message = `Include the default Codex model "${model}", or clear it in Task and image settings`;
+  field.setCustomValidity(message);
+}
+function editorOpen() {
+  return !$("project-editor").hidden;
+}
+function projectSummary(project: Json) {
+  const parts = [];
+  if (project.setup) parts.push(`Setup: ${project.setup}`);
+  const checks = (project.checks ?? []).map((c: Json) => c.name);
+  parts.push(checks.length ? `Checks: ${checks.join(", ")}` : "No checks");
+  return parts.join(" · ");
+}
+function renderProjects() {
+  const list = $("projects");
+  $("project-count").textContent = projects.length
+    ? `${projects.length} project${projects.length === 1 ? "" : "s"}`
+    : "None";
+  $("project-count").classList.toggle("online", projects.length > 0);
+  if (!projects.length) {
+    const empty = document.createElement("li");
+    empty.className = "hint";
+    empty.textContent = "No projects yet.";
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(
+    ...projects.map((project, index) => {
+      const item = document.createElement("li");
+      const text = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = project.name;
+      text.append(
+        name,
+        line(project.path, "hint"),
+        line(projectSummary(project), "hint"),
+      );
+      const buttons = document.createElement("div");
+      buttons.className = "row";
+      const edit = document.createElement("button");
+      edit.textContent = "Edit";
+      edit.setAttribute("aria-label", `Edit ${project.name}`);
+      edit.addEventListener("click", () => openEditor(index));
+      const remove = document.createElement("button");
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label", `Remove ${project.name}`);
+      remove.addEventListener(
+        "click",
+        () =>
+          void action(remove, async () => {
+            if (editorOpen()) closeEditor();
+            await saveProjects(projects.filter((_, i) => i !== index));
+            notice(`Project ${project.name} removed.`);
+          }),
+      );
+      buttons.append(edit, remove);
+      item.append(text, buttons);
+      return item;
+    }),
+  );
+  lockView();
+}
+function checkRow(name = "", command = "") {
+  const row = document.createElement("div");
+  row.className = "row check-row";
+  const nameField = document.createElement("input");
+  nameField.value = name;
+  nameField.placeholder = "test";
+  nameField.maxLength = 64;
+  nameField.autocomplete = "off";
+  nameField.setAttribute("aria-label", "Check name");
+  const commandField = document.createElement("input");
+  commandField.value = command;
+  commandField.placeholder = "npm test";
+  commandField.maxLength = 1024;
+  commandField.autocomplete = "off";
+  commandField.setAttribute("aria-label", "Check command");
+  const remove = document.createElement("button");
+  remove.className = "quiet";
+  remove.textContent = "Remove";
+  remove.setAttribute("aria-label", "Remove this check");
+  remove.addEventListener("click", () => {
+    row.remove();
+    $("project-check-add").focus();
+  });
+  for (const field of [nameField, commandField])
+    field.addEventListener("input", () => field.setCustomValidity(""));
+  row.append(nameField, commandField, remove);
+  return row;
+}
+function openEditor(index: number) {
+  editing = index;
+  const project: Json = projects[index] ?? {};
+  $("project-editor-title").textContent =
+    index < 0 ? "Add project" : `Edit ${project.name}`;
+  input("project-name").value = project.name ?? "";
+  input("project-path").value = project.path ?? "";
+  input("project-setup").value = project.setup ?? "";
+  const checks: Json[] = project.checks?.length
+    ? project.checks
+    : [{ name: "", command: "" }];
+  $("project-checks").replaceChildren(
+    ...checks.map((c) => checkRow(c.name, c.command)),
+  );
+  for (const id of ["project-name", "project-path", "project-setup"])
+    input(id).setCustomValidity("");
+  $("project-editor").hidden = false;
+  $("project-add").hidden = true;
+  input("project-name").focus();
+}
+function closeEditor() {
+  $("project-editor").hidden = true;
+  $("project-add").hidden = false;
+  editing = -1;
+}
+function fieldError(field: HTMLInputElement, label: string, message: string) {
+  field.setCustomValidity(message);
+  field.reportValidity();
+  field.focus();
+  throw new Error(`${label}: ${message}`);
+}
+// Checks what the browser can; the service then checks the folder itself.
+function editorProject() {
+  const name = input("project-name");
+  const path = input("project-path");
+  const value = name.value.trim();
+  if (!namePattern.test(value))
+    fieldError(
+      name,
+      "Project name",
+      "Use 1 to 64 letters, digits, dots, dashes, or underscores.",
+    );
+  if (
+    projects.some(
+      (p, i) => i !== editing && p.name.toLowerCase() === value.toLowerCase(),
+    )
+  )
+    fieldError(
+      name,
+      "Project name",
+      `A project named ${value} already exists.`,
+    );
+  if (!path.value.trim())
+    fieldError(path, "Local folder", "Choose the folder of a local Git clone.");
+  const checks: Json[] = [];
+  const seen = new Set<string>();
+  for (const row of $("project-checks").children) {
+    const [checkName, command] = row.querySelectorAll("input");
+    const n = checkName.value.trim();
+    const c = command.value.trim();
+    if (!n && !c) continue;
+    if (!namePattern.test(n))
+      fieldError(
+        checkName,
+        "Check name",
+        "Use 1 to 64 letters, digits, dots, dashes, or underscores.",
+      );
+    if (seen.has(n.toLowerCase()))
+      fieldError(checkName, "Check name", `${n} is listed twice.`);
+    seen.add(n.toLowerCase());
+    if (!c) fieldError(command, `Check ${n}`, "Enter the command to run.");
+    checks.push({ name: n, command: c });
+  }
+  return {
+    name: value,
+    path: path.value.trim(),
+    setup: input("project-setup").value.trim(),
+    checks,
+  };
+}
+// Saves at once, like the other settings buttons, so a folder that is not a
+// Git clone is reported while the editor is still open.
+async function saveProjects(next: Json[]) {
+  const previous = projects;
+  projects = next;
+  try {
+    await save(true);
+  } catch (e) {
+    projects = previous;
+    renderProjects();
+    throw e;
+  }
 }
 function prefixPreview() {
   const select = $<HTMLSelectElement>("domain");
@@ -211,11 +431,20 @@ function data() {
     port: Number(input("port").value),
     showPrompts: input("show-prompts").checked,
     maxTasks: Number(input("max-tasks").value),
+    projects,
+    allowedModels: models(),
   };
 }
-async function save() {
+async function save(fromEditor = false) {
   // Fields are locked while running, so there is nothing new to save.
   if (running) return;
+  // An open editor holds a draft that Save and continue would silently drop.
+  if (!fromEditor && editorOpen() && !$("workspace").hidden) {
+    $("project-name").focus();
+    throw new Error(
+      "Coding projects: select Save project or Cancel to finish editing the project.",
+    );
+  }
   validate();
   apply(await invoke("save_settings", { input: data() }));
 }
@@ -610,6 +839,44 @@ bind("browse", async () => {
   });
   if (folder) input("folder").value = folder;
 });
+bind("project-add", async () => openEditor(-1));
+bind("project-check-add", async () => {
+  const row = checkRow();
+  $("project-checks").append(row);
+  row.querySelector("input")?.focus();
+});
+bind("project-browse", async () => {
+  const folder = await invoke<string | null>("plugin:dialog|open", {
+    options: {
+      directory: true,
+      multiple: false,
+      title: "Choose a local Git clone",
+    },
+  });
+  if (folder) {
+    input("project-path").value = folder;
+    input("project-path").setCustomValidity("");
+  }
+});
+bind("project-save", async () => {
+  const project = editorProject();
+  const next = [...projects];
+  if (editing < 0) next.push(project);
+  else next[editing] = project;
+  await saveProjects(next);
+  closeEditor();
+  $("project-add").focus();
+  notice(`Project ${project.name} saved. Restart the connection to use it.`);
+});
+$("project-cancel").addEventListener("click", () => {
+  closeEditor();
+  $("project-add").focus();
+});
+for (const id of ["project-name", "project-path", "project-setup"])
+  input(id).addEventListener("input", () => input(id).setCustomValidity(""));
+input("allowed-models").addEventListener("input", () =>
+  input("allowed-models").setCustomValidity(""),
+);
 bind("open-workspace", async () => {
   await save();
   await invoke("open_workspace");

@@ -12,6 +12,7 @@ work on your PC. Setup takes about 10 minutes.
 - [5. Connect Claude](#5-connect-claude)
 - [6. Generate images](#6-generate-images)
 - [7. Watch the activity](#7-watch-the-activity)
+- [Coding projects and allowed models](#coding-projects-and-allowed-models)
 - [Updates](#updates)
 - [Troubleshooting](#troubleshooting)
 - [Where your data is](#where-your-data-is)
@@ -171,6 +172,28 @@ To review and improve your prompts, stop the connection and turn on
 a **Copy prompt** button. This setting is off by default, and prompts stay in memory only.
 
 Settings are locked while the connection runs. Select **Stop** to change them.
+
+## Coding projects and allowed models
+
+![Coding projects and allowed models on the Workspace page](images/6-coding-projects.png)
+
+Under **Workspace → Coding projects**, list the local Git clones that Claude may ask Codex to
+work on. Codex works on a temporary copy and returns a patch. Your clone is only fetched,
+never pushed.
+
+1. Select **Add project**.
+2. Type a name, for example `shop-web`. Use letters, digits, dots, dashes, or underscores.
+3. Select **Browse…** and choose the folder of the clone. It must contain a `.git` entry and be
+   outside the workspace folder.
+4. Optional: type a setup command, for example `npm ci`, and add checks as a name and a
+   command, for example `test` and `npm test`.
+5. Select **Save project**. The app checks the folder and saves at once.
+
+**Allowed models** limits the Codex models Claude can choose. Type model IDs separated by
+commas, for example `gpt-5.1-codex, gpt-5.1-codex-mini`. Leave it empty to allow any model.
+If you set a default model in **Task and image settings**, include it in the list.
+
+Both settings apply the next time you start the connection.
 
 ## Updates
 

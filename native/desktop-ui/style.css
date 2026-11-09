@@ -283,6 +283,46 @@ ol {
 li {
   padding: 7px 0;
 }
+.project-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+}
+.project-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #eef0f5;
+}
+.project-list li > div {
+  min-width: 0;
+}
+.project-list .hint {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+fieldset {
+  border: 1px solid #e0e4ef;
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin: 16px 0 0;
+}
+legend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+.check-head {
+  font-weight: 600;
+  margin: 18px 0 7px;
+}
+.check-row {
+  margin-bottom: 10px;
+}
+.check-row input:first-of-type {
+  flex: 0 1 30%;
+}
 .task-path {
   font-size: 12px;
   overflow-wrap: anywhere;

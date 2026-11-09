@@ -139,6 +139,13 @@ Claude can override these defaults through MCP parameters:
 
 Dimensions preserve aspect ratio and never enlarge the source. Actual dimensions and bytes appear in the result and desktop activity.
 A file-size target is not a guarantee. The service does not reduce dimensions merely to reach a byte target.
+Coding projects and allowed models are desktop settings under **Workspace**, passed to the service as
+`CODEX_PROJECTS` (JSON: `{"<name>": {"path": "...", "setup": "...", "checks": {"<check>": "<command>"}}}`, with empty
+`setup` and `checks` omitted) and `CODEX_ALLOWED_MODELS` (comma-separated model IDs). Each is unset when empty.
+Names match `^[A-Za-z0-9._-]{1,64}$` and model IDs `^[A-Za-z0-9._:/-]{1,128}$`. The desktop requires each project
+folder to be an absolute local path that contains `.git` and lies outside the workspace, the application, and its private data.
+Commands must be a single line. A default model in the task settings must be in a non-empty allowlist.
+
 Image generation quality and background are prompt requests, subject to the image tool's support.
 
 Parallel image generation: a request with `count` above 1 starts one Codex run per image inside one job.
