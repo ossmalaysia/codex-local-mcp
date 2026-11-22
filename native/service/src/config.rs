@@ -10,6 +10,8 @@ pub struct Config {
     pub root: PathBuf,
     pub bin: PathBuf,
     pub model: String,
+    /// Models a caller may choose per task. Empty means no restriction.
+    pub allowed_models: Vec<String>,
     pub mode: String,
     pub backend: String,
     pub network: bool,
@@ -127,13 +129,21 @@ impl Config {
         let defaults: crate::task_options::TaskOptions =
             serde_json::from_str(&value("CODEX_TASK_DEFAULTS", "{}"))?;
         defaults.validate()?;
+        let model = value("CODEX_MODEL", "");
+        let allowed_models = crate::models::parse_allowed(&value("CODEX_ALLOWED_MODELS", ""))?;
+        // A default outside the allowlist must stop the service at startup.
+        crate::models::check_default(
+            &allowed_models,
+            &crate::models::default_model(&model, &defaults),
+        )?;
         Ok(Self {
             defaults,
+            allowed_models,
             root,
             bin,
             mode,
             backend,
-            model: value("CODEX_MODEL", ""),
+            model,
             network: value("CODEX_NETWORK_ACCESS", "true") != "false",
             runtime: value("CODEX_RUNTIME_ROOT", ""),
             private: value("CODEX_PRIVATE_ROOT", ""),
@@ -152,6 +162,37 @@ impl Config {
             git: git_bin(),
             max_patch: number("CODEX_MAX_PATCH_CHARS", 200_000, 50_000_000) as usize,
         })
+    }
+
+    /// A minimal configuration for unit tests, without reading the environment.
+    #[cfg(test)]
+    pub fn for_tests(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            bin: root.join("codex"),
+            model: String::new(),
+            allowed_models: vec![],
+            mode: "workspace-write".into(),
+            backend: String::new(),
+            network: false,
+            runtime: String::new(),
+            private: String::new(),
+            timeout: 300,
+            max_timeout: 1800,
+            output: 40_000,
+            wait: 45,
+            max_jobs: 4,
+            retention: Duration::from_secs(3600),
+            inline: 350_000,
+            response: 750_000,
+            files: 200,
+            activity: false,
+            activity_prompts: false,
+            defaults: Default::default(),
+            projects: Ok(Default::default()),
+            git: Err("git is not used in unit tests".into()),
+            max_patch: 200_000,
+        }
     }
 
     pub fn sandbox_args(&self) -> Vec<String> {

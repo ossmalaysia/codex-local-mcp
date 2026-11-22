@@ -51,6 +51,8 @@ process.env.CODEX_MCP_ROOT = root;
 process.env.CODEX_BIN = installFakeCodex();
 process.env.CODEX_TIMEOUT_SEC = "30";
 process.env.CODEX_MAX_PATCH_CHARS = "20000";
+// An allowlist, so the shared model check is exercised by codex_task too.
+process.env.CODEX_ALLOWED_MODELS = "gpt-5-codex,gpt-5";
 process.env.CODEX_PROJECTS = JSON.stringify({
   demo: { path: clone, setup: "npm ci", checks: { test: "npm test", lint: "npm run lint" } },
   plain: { path: clone },
@@ -136,10 +138,10 @@ describe("codex_task", () => {
 
     // The task reached Codex as written, with only the documented additions.
     const notes = fs.readFileSync(path.join(applied, "notes.txt"), "utf8");
-    expect(notes).toBe(
+    expect(notes.startsWith(
       "prompt: EDIT_REPO please\n\nDone when:\ntests pass\n\nFirst run: npm ci\n\n" +
-        "Before finishing, run these checks and report pass/fail:\n- test: npm test\n",
-    );
+        "Before finishing, run these checks and report pass/fail:\n- test: npm test\nargv: ",
+    )).toBe(true);
 
     // The worktree is gone; the patch and final message are kept.
     const id = header(result, "job_id");
@@ -224,6 +226,7 @@ describe("codex_task", () => {
       [{ project: "nope" }, /Unknown project "nope"\. Configured projects: demo, plain/],
       [{ project: "demo", checks: ["test", "deploy"] }, /Unknown check "deploy".*Configured checks: lint, test/],
       [{ model: "gpt -c x" }, /Refusing to pass model/],
+      [{ model: "o3" }, /Model "o3" is not allowed\. Allowed models: gpt-5-codex, gpt-5\. Call codex_models/],
     ];
     for (const [overrides, message] of bad) {
       const result = await call("codex_task", { project: "plain", ref: "main", task: "EDIT_REPO", wait_sec: 30, ...overrides });

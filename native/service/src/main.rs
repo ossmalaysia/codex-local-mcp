@@ -7,6 +7,7 @@ mod generated;
 mod gitwork;
 mod http;
 mod jobs;
+mod models;
 mod probe;
 mod process;
 mod projects;

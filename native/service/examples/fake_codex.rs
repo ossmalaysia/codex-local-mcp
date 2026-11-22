@@ -49,6 +49,10 @@ fn main() {
         let record = format!("runs/{}.txt", std::process::id());
         std::fs::write(dir.join(record), format!("{start} {}", millis())).unwrap();
     }
+    // Lets a test check the command line, e.g. which --model arrived.
+    if prompt.contains("FAKE_ARGV") {
+        std::fs::write(dir.join("argv.json"), serde_json::to_string(&args).unwrap()).unwrap();
+    }
     if prompt.contains("FAKE_FAILURE") {
         std::process::exit(7);
     }

@@ -47,17 +47,8 @@ pub fn validate(config: &Config, args: &Value) -> Result<Input> {
     )?;
     let reference = args["ref"].as_str().unwrap_or_default();
     projects::validate_ref(reference)?;
-    if let Some(model) = args["model"].as_str()
-        && !model.is_empty()
-        && (model.len() > 128
-            || !model
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b)))
-    {
-        bail!(
-            "Refusing to pass model \"{model}\": only letters, digits and . _ : / - are allowed."
-        );
-    }
+    // The model (shape and CODEX_ALLOWED_MODELS) is checked by Jobs::options,
+    // the shared check every job-starting tool uses, before this job starts.
     let checks = names
         .into_iter()
         .map(|name| {
