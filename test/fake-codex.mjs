@@ -28,7 +28,11 @@ process.stdin.on("end", () => {
 });
 
 function finish() {
-  fs.writeFileSync(path.join(cwd, "notes.txt"), `prompt: ${prompt}\n`);
+  // The argv line lets tests check the command line, e.g. which --model arrived.
+  fs.writeFileSync(
+    path.join(cwd, "notes.txt"),
+    `prompt: ${prompt}\nargv: ${JSON.stringify(args)}\n`,
+  );
   fs.mkdirSync(path.join(cwd, "output"), { recursive: true });
   // 1x1 transparent PNG.
   fs.writeFileSync(
