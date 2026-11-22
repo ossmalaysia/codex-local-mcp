@@ -5,6 +5,7 @@ mod config;
 mod generated;
 mod http;
 mod jobs;
+mod models;
 mod probe;
 mod process;
 mod protocol;

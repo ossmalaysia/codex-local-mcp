@@ -21,11 +21,11 @@
             "type": "number"
           },
           "model": {
-            "description": "Override the Codex model for this run.",
+            "description": "Codex model id for this task. Defaults to the server's configured model. Call codex_models to see allowed values.",
             "type": "string"
           },
           "reasoning_effort": {
-            "description": "Model reasoning effort. Supported values depend on the model.",
+            "description": "Codex reasoning effort for this task; supported values depend on the model. Call codex_models to see allowed values and the default.",
             "type": "string",
             "enum": [
               "default",
@@ -84,11 +84,11 @@
             ]
           },
           "model": {
-            "description": "Override the Codex model for this image task.",
+            "description": "Codex model id for this task. Defaults to the server's configured model. Call codex_models to see allowed values.",
             "type": "string"
           },
           "reasoning_effort": {
-            "description": "Codex reasoning effort, subject to model support.",
+            "description": "Codex reasoning effort for this task; supported values depend on the model. Call codex_models to see allowed values and the default.",
             "type": "string",
             "enum": [
               "default",
@@ -202,6 +202,19 @@
         "required": [
           "path"
         ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "codex_models",
+      "title": "List the Codex models and reasoning efforts allowed here",
+      "description": "List the model ids and reasoning efforts this server accepts, and the defaults used when a task does not choose. Call this before passing model or reasoning_effort to a task tool.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
         "$schema": "http://json-schema.org/draft-07/schema#"
       },
       "execution": {

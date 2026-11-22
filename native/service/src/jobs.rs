@@ -102,6 +102,8 @@ impl Jobs {
         }
         let options: crate::task_options::TaskOptions = serde_json::from_value(values)?;
         options.validate()?;
+        // Before any slot, workspace or process: a refused model never runs.
+        crate::models::validate(&self.config.allowed_models, &options.model)?;
         // The caller's own text, not the service-added image instructions, is
         // what a user can improve. Sent once; the desktop keeps merged fields.
         let mut first = if self.config.activity_prompts {
@@ -751,6 +753,7 @@ mod tests {
             root: root.canonicalize().unwrap(),
             bin,
             model: String::new(),
+            allowed_models: vec![],
             mode: "workspace-write".into(),
             backend: String::new(),
             network: false,
@@ -887,6 +890,29 @@ mod tests {
         let unknown = jobs.cancel_result("no-such-job").await;
         assert_eq!(unknown["isError"], true);
         assert!(text(&unknown).contains("Unknown job \"no-such-job\""));
+    }
+
+    #[test]
+    fn refuses_a_model_outside_the_allowlist_before_starting() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = Config::for_tests(root.path());
+        config.allowed_models = vec!["gpt-5-codex".into(), "gpt-5".into()];
+        let jobs = Jobs::new(Arc::new(config));
+        for action in ["codex_run", "codex_generate_image"] {
+            let error = jobs
+                .start(
+                    action,
+                    json!({"prompt":"hello","workspace":"refused","model":"gpt-4o"}),
+                )
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains("Model \"gpt-4o\" is not allowed"), "{error}");
+            assert!(error.contains("Allowed models: gpt-5-codex, gpt-5"));
+        }
+        // No job, workspace or Codex process was created.
+        assert!(jobs.entries.lock().unwrap().is_empty());
+        assert!(!root.path().join("refused").exists());
     }
 
     #[test]
