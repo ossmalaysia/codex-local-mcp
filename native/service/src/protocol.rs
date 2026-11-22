@@ -1,4 +1,4 @@
-use crate::{activity, artifacts, jobs::Jobs};
+use crate::{activity, artifacts, jobs::Jobs, models};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
@@ -134,6 +134,7 @@ impl ServerHandler for Protocol {
             "codex_generate_image",
             "codex_job_result",
             "codex_read_artifact",
+            "codex_models",
         ]
         .contains(&name)
         {
@@ -192,6 +193,9 @@ impl ServerHandler for Protocol {
                     Ok(Err(e)) => artifacts::error(e),
                     Err(_) => artifacts::error("Artifact worker failed"),
                 }
+            }
+            "codex_models" => {
+                json!({"content":[artifacts::text(models::report(&self.jobs.config))]})
             }
             _ => unreachable!(),
         };

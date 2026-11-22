@@ -236,13 +236,30 @@ See the [Claude Code remote MCP documentation](https://code.claude.com/docs/en/m
 | Tool | Main arguments | Description |
 |---|---|---|
 | `codex_run` | `prompt`, `workspace?`, `timeout_sec?`, `model?`, `reasoning_effort?`, `wait_sec?` | Run any task. |
-| `codex_generate_image` | `prompt`, `count?`, `size?`, `quality?`, `output_format?`, `background?`, `target_file_kb?`, `workspace?`, `open?`, `wait_sec?` | Generate images. Your description is passed through as written. |
+| `codex_generate_image` | `prompt`, `count?`, `size?`, `quality?`, `model?`, `reasoning_effort?`, `output_format?`, `background?`, `target_file_kb?`, `workspace?`, `open?`, `wait_sec?` | Generate images. Your description is passed through as written. |
 | `codex_job_result` | `job_id`, `wait_sec?` | Collect the result of a task that was still running. |
 | `codex_read_artifact` | `path`, `max_bytes?` | Read a file from a workspace. |
+| `codex_models` | *(none)* | List the models and reasoning efforts this server accepts, and the defaults. |
 
 Use the same `workspace` name across calls to keep working on the same files.
 The [Windows app guide](docs/WINDOWS-GUIDE.md#6-generate-images) lists the image settings and
 gives example requests.
+
+### Choosing a model and reasoning effort
+
+A calling model can pick the Codex model and reasoning effort per task with `model` and
+`reasoning_effort`. `codex_models` tells it what is allowed:
+
+```
+allowed_models: gpt-5-codex, gpt-5
+default_model: gpt-5
+reasoning_efforts: default, none, minimal, low, medium, high, xhigh
+default_reasoning_effort: default
+```
+
+Set `CODEX_ALLOWED_MODELS` to limit the choice. A task that asks for another model is refused
+before Codex starts. Without the variable, any well-formed model id is passed to Codex.
+The Windows app does not set this variable yet.
 
 ### Long-running tasks
 
@@ -284,7 +301,8 @@ All settings are optional. Set them in the client's `env` block.
 |---|---|---|
 | `CODEX_MCP_ROOT` | `~/.codex-mcp/workspaces` | Root for all workspaces. Nothing is written outside it. |
 | `CODEX_BIN` | `codex` | Absolute path to the Codex CLI. |
-| `CODEX_MODEL` | *(Codex default)* | Model override. |
+| `CODEX_MODEL` | *(Codex default)* | Model used when a task does not choose one. |
+| `CODEX_ALLOWED_MODELS` | *(any)* | Comma-separated model ids a task may choose, e.g. `gpt-5-codex,gpt-5`. Other models are refused. If set, it must include `CODEX_MODEL`, or the server does not start. |
 | `CODEX_TIMEOUT_SEC` | `300` | Default timeout before a run is stopped. |
 | `CODEX_MAX_TIMEOUT_SEC` | `1800` | Highest timeout a caller may request. |
 | `CODEX_MAX_OUTPUT_CHARS` | `40000` | Output limit; the start and end are kept. |

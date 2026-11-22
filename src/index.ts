@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { config } from "./config.js";
+import { assertModelConfig } from "./models.js";
 import { createServer } from "./server.js";
 
 async function main(): Promise<void> {
+  // Checked here as well as in createServer, because HTTP mode only creates a
+  // server per session and would otherwise start with a broken allowlist.
+  assertModelConfig();
   const tunnelMode = process.env.CODEX_MCP_TUNNEL;
   if (tunnelMode && !["quick", "named"].includes(tunnelMode)) throw new Error("CODEX_MCP_TUNNEL must be quick or named.");
   const tunnel = process.argv.includes("--tunnel") || !!tunnelMode;
