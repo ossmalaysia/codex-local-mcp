@@ -103,8 +103,8 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: |
-          cargo test --locked --all-targets
           cargo build --locked --examples
+          cargo test --locked --all-targets
           node node_modules/playwright/cli.js install chromium
           node scripts/test-native.mjs --service "artifacts/native-desktop-$env:RELEASE_VERSION/payload/runtime/codex-mcp-service.exe"
           node scripts/test-desktop-ui.mjs

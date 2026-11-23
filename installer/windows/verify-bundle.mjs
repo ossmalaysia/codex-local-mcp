@@ -26,7 +26,7 @@ if (manifest.service === 'rust') {
     }));
     // Check by name, not count, so adding a tool does not break installer verification.
     const names = new Set((await native.listTools()).tools.map(t => t.name));
-    const expected = ['codex_run', 'codex_generate_image', 'codex_job_result', 'codex_read_artifact', 'codex_models'];
+    const expected = ['codex_run', 'codex_generate_image', 'codex_job_result', 'codex_read_artifact', 'codex_models', 'codex_job_cancel', 'codex_jobs_list'];
     if (native.getServerVersion()?.version !== manifest.version || !expected.every(n => names.has(n))) throw new Error('Installed Rust service contract or version failed.');
     console.log(`Installed Rust service and version verified: ${manifest.version}. No AI model was called.`);
   } finally { await native.close(); fs.rmdirSync(root); }

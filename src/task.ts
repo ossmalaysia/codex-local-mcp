@@ -16,6 +16,8 @@ export interface TaskInput {
   model?: string;
   reasoning_effort?: string;
   onProgress?: (progress: TaskProgress) => void;
+  /** Stops the run. The task still snapshots, diffs and reports what was written. */
+  signal?: AbortSignal;
 }
 
 export interface TaskResult {
@@ -23,6 +25,7 @@ export interface TaskResult {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  cancelled: boolean;
   durationMs: number;
   output: string;
   artifacts: ArtifactReport;
@@ -50,18 +53,49 @@ export function clampTimeout(requested?: number): number {
  */
 const workspaceLocks = new Map<string, Promise<unknown>>();
 
-function withWorkspaceLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const previous = workspaceLocks.get(key) ?? Promise.resolve();
-  const run = previous.then(fn, fn);
-  // Keep the chain alive but never let a rejection escape into the next waiter.
+export class TaskCancelledError extends Error {}
+
+function withWorkspaceLock<T>(
+  key: string,
+  fn: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  // Never let a rejection escape into the next waiter.
+  const turn = (workspaceLocks.get(key) ?? Promise.resolve()).then(
+    () => undefined,
+    () => undefined,
+  );
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
   workspaceLocks.set(
     key,
-    run.then(
-      () => undefined,
-      () => undefined,
-    ),
+    turn.then(() => held),
   );
-  return run;
+
+  // A job cancelled while queued behind another run on the same workspace
+  // gives up its place instead of waiting for the lock only to do nothing.
+  // The next waiter still waits for `turn`, so ordering is kept.
+  return new Promise<boolean>((resolve) => {
+    if (signal?.aborted) return resolve(false);
+    const onAbort = () => resolve(false);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    void turn.then(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(true);
+    });
+  }).then(async (acquired) => {
+    if (!acquired) {
+      release();
+      throw new TaskCancelledError(
+        "Cancelled before Codex started; nothing ran and no files changed.",
+      );
+    }
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  });
 }
 
 /**
@@ -85,6 +119,7 @@ export async function executeTask(input: TaskInput): Promise<TaskResult> {
       model: input.model,
       reasoningEffort: input.reasoning_effort,
       onProgress: (phase) => input.onProgress?.({ phase }),
+      signal: input.signal,
     });
     input.onProgress?.({
       phase: "collecting_files",
@@ -108,17 +143,18 @@ export async function executeTask(input: TaskInput): Promise<TaskResult> {
       exitCode: run.exitCode,
       signal: run.signal,
       timedOut: run.timedOut,
+      cancelled: run.cancelled,
       durationMs: run.durationMs,
       output:
         parts.filter(Boolean).join("\n\n") || "(codex produced no output)",
       artifacts,
     };
-  });
+  }, input.signal);
 }
 
 /** True when the run did not complete normally, including signal deaths. */
 export function taskFailed(result: TaskResult): boolean {
-  if (result.timedOut || result.signal) return true;
+  if (result.timedOut || result.cancelled || result.signal) return true;
   // A null exit code with no signal means the process went away unexplained.
   return result.exitCode === null || result.exitCode !== 0;
 }

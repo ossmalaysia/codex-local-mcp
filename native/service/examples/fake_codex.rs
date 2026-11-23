@@ -5,6 +5,11 @@ fn main() {
     if args.as_slice() == ["login", "status"] {
         return;
     }
+    // The grandchild FAKE_SLEEP starts, so cancelling must kill the whole tree.
+    if args.as_slice() == ["sleep-child"] {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        return;
+    }
     if args.first().map(String::as_str) != Some("exec") {
         std::process::exit(2);
     }
@@ -29,6 +34,24 @@ fn main() {
         "{}",
         serde_json::json!({"type":"item.started","item":{"id":"one","type":"command_execution","command":"private-command-sentinel","status":"in_progress"}})
     );
+    // Stands in for a long run that gets cancelled: writes a partial file,
+    // starts a grandchild, records both process ids, then waits.
+    if prompt.contains("FAKE_SLEEP") {
+        std::fs::write(dir.join("partial.txt"), "written before cancel").unwrap();
+        // Never waited for on purpose: it must outlive this process unless the
+        // service kills the whole tree.
+        #[allow(clippy::zombie_processes)]
+        let grandchild = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("sleep-child")
+            .spawn()
+            .unwrap();
+        std::fs::write(
+            dir.join("pids.txt"),
+            format!("{} {}", std::process::id(), grandchild.id()),
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
     if prompt.contains("FAKE_TIMEOUT") {
         std::thread::sleep(std::time::Duration::from_secs(10));
     }

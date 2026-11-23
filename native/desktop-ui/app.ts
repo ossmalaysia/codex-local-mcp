@@ -359,12 +359,14 @@ function taskParameters(task: Json) {
 function taskPhase(task: Json) {
   if (task.status === "completed") return "Task completed";
   if (task.status === "failed") return "Task failed";
+  if (task.status === "cancelled") return "Task cancelled";
   return phaseNames[task.phase] ?? "Waiting for progress";
 }
 const statusClass: Record<string, string> = {
   running: "busy",
   completed: "online",
   failed: "error",
+  cancelled: "warning",
 };
 type TaskView = {
   card: HTMLElement;
