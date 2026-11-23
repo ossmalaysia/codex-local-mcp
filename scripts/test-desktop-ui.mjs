@@ -354,6 +354,18 @@ try {
     await page.locator("#notice").innerText(),
     /Allowed models: "bad model" is not a valid model ID/,
   );
+  // A default model outside the list would stop the service at startup.
+  await page.locator("#task-model").fill("o3");
+  await page.locator("#allowed-models").fill("gpt-5.1-codex");
+  await page
+    .locator("#workspace")
+    .getByRole("button", { name: "Save and continue →" })
+    .click();
+  assert.match(
+    await page.locator("#notice").innerText(),
+    /Allowed models: The default Codex model "o3" \(Task and image settings\) is not in this list/,
+  );
+  await page.locator("#task-model").fill("");
   await page.locator("#allowed-models").fill(" gpt-5.1-codex, o4-mini, ");
   await page.getByRole("button", { name: /Activity/ }).click();
   await page.locator("#show-prompts").check();

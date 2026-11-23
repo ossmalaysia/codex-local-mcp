@@ -171,9 +171,12 @@ pub fn validate(
             "Allowed models: \"{model}\" is not a valid model ID. Use letters, digits and . _ : / -"
         );
     }
+    // The service refuses to start when its default model is outside the
+    // allowlist, so the same case is refused here, at save, with both fields named.
     ensure!(
         default_model.is_empty() || models.is_empty() || models.iter().any(|m| m == default_model),
-        "The default Codex model \"{default_model}\" is not in Allowed models"
+        "The default Codex model \"{default_model}\" (Task and image settings) is not in Allowed models ({}). Add it to Allowed models, or change or clear the default model; otherwise the connection cannot start",
+        models.join(", ")
     );
     ensure!(
         env(projects, models)?
@@ -435,7 +438,11 @@ mod tests {
             assert!(error.contains("not a valid model ID"), "{error}");
         }
         let error = message(validate(&[], &["o4-mini".into()], "gpt-5", &[], never));
-        assert!(error.contains("not in Allowed models"), "{error}");
+        assert!(
+            error
+                .contains("\"gpt-5\" (Task and image settings) is not in Allowed models (o4-mini)"),
+            "{error}"
+        );
         validate(&[], &["gpt-5".into()], "gpt-5", &[], never).unwrap();
         validate(&[], &[], "gpt-5", &[], never).unwrap();
     }

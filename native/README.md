@@ -144,7 +144,8 @@ Coding projects and allowed models are desktop settings under **Workspace**, pas
 `setup` and `checks` omitted) and `CODEX_ALLOWED_MODELS` (comma-separated model IDs). Each is unset when empty.
 Names match `^[A-Za-z0-9._-]{1,64}$` and model IDs `^[A-Za-z0-9._:/-]{1,128}$`. The desktop requires each project
 folder to be an absolute local path that contains `.git` and lies outside the workspace, the application, and its private data.
-Commands must be a single line. A default model in the task settings must be in a non-empty allowlist.
+Commands must be a single line. The desktop never sets `CODEX_MODEL`, so the service's default model is the task settings'
+**Codex model**. Saving refuses one outside a non-empty allowlist, because the service would otherwise refuse to start.
 
 Image generation quality and background are prompt requests, subject to the image tool's support.
 

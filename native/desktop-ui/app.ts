@@ -220,7 +220,7 @@ function modelsValidity() {
   if (bad)
     message = `"${bad}" is not a valid model ID. Use letters, digits, and . _ : / -`;
   else if (model && list.length && !list.includes(model))
-    message = `Include the default Codex model "${model}", or clear it in Task and image settings`;
+    message = `The default Codex model "${model}" (Task and image settings) is not in this list. Add it here, or change or clear the default model; otherwise the connection cannot start.`;
   field.setCustomValidity(message);
 }
 function editorOpen() {
