@@ -17,7 +17,7 @@ pub struct Job {
     pub started: Instant,
     /// Cancelled by codex_job_cancel, or with the server. A child of `Jobs::cancel`.
     pub cancel: CancellationToken,
-    options: crate::task_options::TaskOptions,
+    pub(crate) options: crate::task_options::TaskOptions,
     state: Mutex<JobState>,
     pub notify: Notify,
 }
@@ -37,7 +37,7 @@ pub struct Jobs {
     locks: Mutex<HashMap<PathBuf, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     slots: Arc<Semaphore>,
     /// Caps Codex processes, not only jobs: one image job can start several runs.
-    runs: Arc<Semaphore>,
+    pub(crate) runs: Arc<Semaphore>,
     pub cancel: CancellationToken,
     pub artifact_slots: Arc<Semaphore>,
 }
@@ -70,40 +70,7 @@ impl Jobs {
             .filter(|p| !p.is_empty())
             .ok_or_else(|| anyhow::anyhow!("prompt is required"))?;
         ensure!(prompt.len() <= 1_000_000, "Prompt exceeds the byte limit");
-        let mut values = serde_json::to_value(&self.config.defaults)?;
-        for key in [
-            "model",
-            "reasoning_effort",
-            "timeout_sec",
-            "count",
-            "size",
-            "quality",
-            "output_format",
-            "output_compression",
-            "background",
-            "target_file_kb",
-        ] {
-            if let Some(value) = args.get(key) {
-                values[key] = value.clone();
-            }
-        }
-        if args.get("model").is_none() && !self.config.model.is_empty() {
-            values["model"] = json!(self.config.model);
-        }
-        if args.get("timeout_sec").is_none() && std::env::var_os("CODEX_TASK_DEFAULTS").is_none() {
-            values["timeout_sec"] = json!(self.config.timeout.min(self.config.max_timeout));
-        }
-        if let Some(n) = args["timeout_sec"].as_f64() {
-            values["timeout_sec"] = json!(if n > 0.0 {
-                n.clamp(1.0, self.config.max_timeout.min(1800) as f64) as u64
-            } else {
-                self.config.defaults.timeout_sec
-            });
-        }
-        let options: crate::task_options::TaskOptions = serde_json::from_value(values)?;
-        options.validate()?;
-        // Before any slot, workspace or process: a refused model never runs.
-        crate::models::validate(&self.config.allowed_models, &options.model)?;
+        let options = self.options(&args)?;
         // The caller's own text, not the service-added image instructions, is
         // what a user can improve. Sent once; the desktop keeps merged fields.
         let mut first = if self.config.activity_prompts {
@@ -137,13 +104,52 @@ impl Jobs {
             anyhow::anyhow!("Too many running jobs. Collect a result before starting another job")
         })?;
         let dir = workspace::prepare(&self.config.root, args["workspace"].as_str())?;
+        let job = self.register(action, dir, options)?;
+        self.emit(&job, "running", first);
+        let timeout = job.options.timeout_sec.min(self.config.max_timeout);
+        let owner = self.clone();
+        let running = job.clone();
+        self.spawn(&job, permit, async move {
+            owner.execute(&running, prompt, timeout, open).await
+        });
+        Ok(job)
+    }
+
+    /// Starts codex_task. Everything is validated before the job exists.
+    pub fn start_task(self: &Arc<Self>, args: Value) -> Result<Arc<Job>> {
+        let input = crate::coding::validate(&self.config, &args)?;
+        let options = self.options(&args)?;
+        let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
+            anyhow::anyhow!("Too many running jobs. Collect a result before starting another job")
+        })?;
+        let dir = workspace::prepare(
+            &self.config.root,
+            Some(&format!("tasks/{}", input.project.name)),
+        )?;
+        let job = self.register("codex_task", dir, options)?;
+        self.emit(&job, "running", json!({}));
+        let timeout = job.options.timeout_sec.min(self.config.max_timeout);
+        let owner = self.clone();
+        let running = job.clone();
+        self.spawn(&job, permit, async move {
+            crate::coding::execute(&owner, &running, input, timeout).await
+        });
+        Ok(job)
+    }
+
+    fn register(
+        &self,
+        action: &str,
+        dir: PathBuf,
+        options: crate::task_options::TaskOptions,
+    ) -> Result<Arc<Job>> {
         let job = Arc::new(Job {
             id: uuid::Uuid::new_v4().to_string(),
             action: action.into(),
             workspace: dir,
             started: Instant::now(),
             cancel: self.cancel.child_token(),
-            options: options.clone(),
+            options,
             state: Mutex::new(JobState {
                 result: None,
                 status: "running",
@@ -178,8 +184,16 @@ impl Jobs {
             ensure!(entries.len() < 132, "Job storage is full");
             entries.insert(job.id.clone(), job.clone());
         }
-        self.emit(&job, "running", first);
-        let timeout = options.timeout_sec.min(self.config.max_timeout);
+        Ok(job)
+    }
+
+    /// Runs `work` detached from the call that started it, holding `permit`.
+    fn spawn(
+        self: &Arc<Self>,
+        job: &Arc<Job>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        work: impl std::future::Future<Output = Result<Value>> + Send + 'static,
+    ) {
         let owner = self.clone();
         let running = job.clone();
         tokio::spawn(async move {
@@ -191,10 +205,7 @@ impl Jobs {
                     heartbeat_owner.emit(&heartbeat_job, "running", json!({}));
                 }
             });
-            let result = owner
-                .execute(&running, prompt, timeout, open)
-                .await
-                .unwrap_or_else(artifacts::error);
+            let result = work.await.unwrap_or_else(artifacts::error);
             heartbeat.abort();
             // A cancel that lands after Codex already finished cleanly changes nothing.
             let status = match (
@@ -217,7 +228,46 @@ impl Jobs {
             drop(permit);
             running.notify.notify_waiters();
         });
-        Ok(job)
+    }
+
+    /// Service defaults with the caller's allowed overrides, validated.
+    fn options(&self, args: &Value) -> Result<crate::task_options::TaskOptions> {
+        let mut values = serde_json::to_value(&self.config.defaults)?;
+        for key in [
+            "model",
+            "reasoning_effort",
+            "timeout_sec",
+            "count",
+            "size",
+            "quality",
+            "output_format",
+            "output_compression",
+            "background",
+            "target_file_kb",
+        ] {
+            if let Some(value) = args.get(key) {
+                values[key] = value.clone();
+            }
+        }
+        if args.get("model").is_none() && !self.config.model.is_empty() {
+            values["model"] = json!(self.config.model);
+        }
+        if args.get("timeout_sec").is_none() && std::env::var_os("CODEX_TASK_DEFAULTS").is_none() {
+            values["timeout_sec"] = json!(self.config.timeout.min(self.config.max_timeout));
+        }
+        if let Some(n) = args["timeout_sec"].as_f64() {
+            values["timeout_sec"] = json!(if n > 0.0 {
+                n.clamp(1.0, self.config.max_timeout.min(1800) as f64) as u64
+            } else {
+                self.config.defaults.timeout_sec
+            });
+        }
+        let options: crate::task_options::TaskOptions = serde_json::from_value(values)?;
+        options.validate()?;
+        // Before any slot, workspace or process: a refused model never runs.
+        // Every job-starting tool goes through here, codex_task included.
+        crate::models::validate(&self.config.allowed_models, &options.model)?;
+        Ok(options)
     }
 
     async fn execute(
@@ -408,7 +458,7 @@ impl Jobs {
         runs.sort_by_key(|(index, _)| *index);
         Ok(Combined::new(runs, failures))
     }
-    fn progress(&self, job: &Job, event: Value) {
+    pub(crate) fn progress(&self, job: &Job, event: Value) {
         if let Some(phase) = event["legacyPhase"].as_str() {
             // Retain compatibility with older CLI stderr markers.
             let phase = match phase {
@@ -442,7 +492,7 @@ impl Jobs {
             );
         }
     }
-    fn phase(&self, job: &Job, phase: &'static str) {
+    pub(crate) fn phase(&self, job: &Job, phase: &'static str) {
         {
             let mut state = job.state.lock().unwrap();
             state.last_event = Instant::now();
@@ -771,6 +821,9 @@ mod tests {
             activity: false,
             activity_prompts: false,
             defaults: Default::default(),
+            projects: Ok(Default::default()),
+            git: Err("set by the codex_task tests".into()),
+            max_patch: 200_000,
         }
     }
 
@@ -810,6 +863,88 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         check()
+    }
+
+    /// git for the codex_task tests: absolute, from PATH, like the service.
+    fn git_bin() -> std::path::PathBuf {
+        let name = format!("git{}", std::env::consts::EXE_SUFFIX);
+        std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|d| d.join(&name))
+            .find(|p| p.is_file())
+            .expect("git is required for the codex_task tests")
+    }
+
+    /// A local bare repository as origin and a clone of it, without hooks or
+    /// line-ending conversion.
+    fn git_project() -> (tempfile::TempDir, std::path::PathBuf) {
+        let scratch = tempfile::tempdir().unwrap();
+        let run = |cwd: &std::path::Path, args: &[&str]| {
+            let status = std::process::Command::new(git_bin())
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+                .args(["-c", "init.defaultBranch=main", "-c", "core.autocrlf=false"])
+                .args(args)
+                .current_dir(cwd)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        let s = scratch.path();
+        run(s, &["init", "-q", "--bare", "origin.git"]);
+        run(s, &["init", "-q", "seed"]);
+        std::fs::write(s.join("seed/README.md"), "# Demo\n").unwrap();
+        run(&s.join("seed"), &["add", "-A"]);
+        run(&s.join("seed"), &["commit", "-q", "-m", "initial"]);
+        run(
+            &s.join("seed"),
+            &["push", "-q", "../origin.git", "HEAD:refs/heads/main"],
+        );
+        run(s, &["clone", "-q", "origin.git", "clone"]);
+        let clone = s.join("clone");
+        (scratch, clone)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancelled_codex_task_reports_cancelled_and_removes_its_worktree() {
+        let root = tempfile::tempdir().unwrap();
+        let (_scratch, clone) = git_project();
+        let mut config = fixture_config(root.path());
+        config.git = Ok(git_bin());
+        config.projects = crate::projects::parse(&json!({"demo":{"path":clone}}).to_string());
+        let jobs = Jobs::new(Arc::new(config));
+        let job = jobs
+            .start_task(json!({"task":"FAKE_SLEEP","project":"demo","ref":"main"}))
+            .unwrap();
+        let worktree = job.workspace.join(&job.id);
+        let pids_file = worktree.join("pids.txt");
+        assert!(
+            eventually(|| std::fs::read_to_string(&pids_file).is_ok_and(|s| s.contains(' '))).await
+        );
+        let pids: Vec<u32> = std::fs::read_to_string(&pids_file)
+            .unwrap()
+            .split(' ')
+            .map(|p| p.trim().parse().unwrap())
+            .collect();
+
+        let cancelled = jobs.cancel_result(&job.id).await;
+        assert_ne!(cancelled["isError"], true);
+        let result = jobs.result(job.clone(), Some(20.0)).await;
+        let body = text(&result);
+        assert_eq!(result["isError"], true);
+        assert!(body.contains("status: cancelled"), "{body}");
+        assert!(body.contains("(CANCELLED - process killed)"), "{body}");
+        // What the run wrote before the cancel is still in the patch.
+        assert!(body.contains("partial.txt"), "{body}");
+        assert!(eventually(|| !pids.iter().any(|p| alive(*p))).await);
+        // The worktree and its registration are gone; the patch is kept.
+        assert!(!worktree.exists());
+        assert!(job.workspace.join(format!("{}.patch", job.id)).is_file());
+        let list = std::process::Command::new(git_bin())
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(&clone)
+            .output()
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&list.stdout).contains(&job.id));
+        assert!(text(&jobs.list("all")).contains("tool: codex_task | status: cancelled"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -913,6 +1048,27 @@ mod tests {
         // No job, workspace or Codex process was created.
         assert!(jobs.entries.lock().unwrap().is_empty());
         assert!(!root.path().join("refused").exists());
+    }
+
+    #[test]
+    fn codex_task_refuses_a_disallowed_model_before_starting() {
+        let root = tempfile::tempdir().unwrap();
+        let clone = tempfile::tempdir().unwrap();
+        let mut config = Config::for_tests(root.path());
+        config.allowed_models = vec!["gpt-5-codex".into(), "gpt-5".into()];
+        config.projects =
+            crate::projects::parse(&json!({"demo":{"path":clone.path()}}).to_string());
+        let jobs = Jobs::new(Arc::new(config));
+        let error = jobs
+            .start_task(json!({"task":"fix it","project":"demo","ref":"main","model":"o3"}))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("Model \"o3\" is not allowed"), "{error}");
+        assert!(error.contains("Allowed models: gpt-5-codex, gpt-5"));
+        // Refused before any job, task folder, fetch or Codex process.
+        assert!(jobs.entries.lock().unwrap().is_empty());
+        assert!(!root.path().join("tasks").exists());
     }
 
     #[test]

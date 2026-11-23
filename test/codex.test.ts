@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capOutput } from "../src/codex.js";
+import { capOutput, withEnv } from "../src/codex.js";
 
 describe("capOutput", () => {
   it("leaves short output alone", () => {
@@ -13,5 +13,15 @@ describe("capOutput", () => {
     expect(capped.startsWith("A".repeat(20))).toBe(true);
     expect(capped.endsWith("C".repeat(20))).toBe(true);
     expect(capped).toContain("characters omitted");
+  });
+});
+
+describe("withEnv", () => {
+  it("replaces a variable whatever its case on Windows, and adds it elsewhere", () => {
+    const env = withEnv({ NPM_CONFIG_CACHE: "C:\\npm\\cache", KEEP: "1" }, { npm_config_cache: "ours" });
+    expect(env.npm_config_cache).toBe("ours");
+    expect(env.KEEP).toBe("1");
+    // Two keys differing only in case would leave Windows to pick one of them.
+    expect("NPM_CONFIG_CACHE" in env).toBe(process.platform !== "win32");
   });
 });

@@ -95,7 +95,7 @@ pub fn report(config: &Config) -> String {
             config.defaults.reasoning_effort
         ),
         String::new(),
-        "Pass model and reasoning_effort on codex_run or codex_generate_image to choose them per task."
+        "Pass model and reasoning_effort on codex_run, codex_generate_image or codex_task to choose them per task."
             .to_owned(),
     ]
     .join("\n")
@@ -148,7 +148,7 @@ mod tests {
             "allowed_models: any (no allowlist set)\ndefault_model: Codex CLI default\n\
              reasoning_efforts: default, none, minimal, low, medium, high, xhigh\n\
              default_reasoning_effort: default\n\n\
-             Pass model and reasoning_effort on codex_run or codex_generate_image to choose them per task."
+             Pass model and reasoning_effort on codex_run, codex_generate_image or codex_task to choose them per task."
         );
         config.allowed_models = vec!["gpt-5-codex".into(), "gpt-5".into()];
         config.defaults.model = "gpt-5-codex".into();

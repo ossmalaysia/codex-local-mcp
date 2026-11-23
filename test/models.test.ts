@@ -27,7 +27,7 @@ describe("codex_models without an allowlist", () => {
         "reasoning_efforts: default, none, minimal, low, medium, high, xhigh",
         "default_reasoning_effort: default",
         "",
-        "Pass model and reasoning_effort on codex_run or codex_generate_image to choose them per task.",
+        "Pass model and reasoning_effort on codex_run, codex_generate_image or codex_task to choose them per task.",
       ].join("\n"),
     );
   });
@@ -42,6 +42,8 @@ describe("codex_models without an allowlist", () => {
       "codex_models",
       "codex_job_cancel",
       "codex_jobs_list",
+      "codex_projects",
+      "codex_task",
     ]);
   });
 
