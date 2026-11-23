@@ -51,6 +51,14 @@ export const config = {
   ),
   /** Empty means "whatever codex is configured to use". */
   model: process.env.CODEX_MODEL || "",
+  /**
+   * Models a caller may choose per task. Empty means no restriction. Checked
+   * at startup by assertModelConfig and per call by validateModel (models.ts).
+   */
+  allowedModels: (process.env.CODEX_ALLOWED_MODELS || "")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean),
   defaultTimeoutSec: num("CODEX_TIMEOUT_SEC", 300),
   maxTimeoutSec: num("CODEX_MAX_TIMEOUT_SEC", 1800),
   /** Codex output is capped so a runaway build log cannot flood the caller. */

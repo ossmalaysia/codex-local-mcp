@@ -59,6 +59,19 @@ try {
   const timed = await local.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_TIMEOUT', timeout_sec: 1, wait_sec: 5 } });
   assert.equal(timed.isError, true); assert.match(timed.content[0].text, /TIMED OUT/);
   const failed = await local.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_FAILURE', wait_sec: 5 } }); assert.equal(failed.isError, true);
+  // Cancelling stops the process tree; files written before the cancel are still reported.
+  const sleeping = await local.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_SLEEP private-prompt-sentinel', workspace: 'cancel-me', wait_sec: 0 } });
+  const sleepId = /job_id: ([\w-]+)/.exec(sleeping.content[0].text)[1];
+  for (let i = 0; i < 100 && !(await fs.readFile(path.join(root, 'cancel-me', 'pids.txt'), 'utf8').catch(() => '')).includes(' '); i++) await new Promise(r => setTimeout(r, 100));
+  const runningList = await local.callTool({ name: 'codex_jobs_list', arguments: { status: 'running' } });
+  assert.match(runningList.content[0].text, new RegExp(`job_id: ${sleepId} \\| tool: codex_run \\| status: running`)); assert.ok(!runningList.content[0].text.includes('private-prompt-sentinel'));
+  const cancel = await local.callTool({ name: 'codex_job_cancel', arguments: { job_id: sleepId } });
+  assert.notEqual(cancel.isError, true); assert.match(cancel.content[0].text, /status: cancelled/);
+  const cancelled = await local.callTool({ name: 'codex_job_result', arguments: { job_id: sleepId, wait_sec: 0 } });
+  assert.equal(cancelled.isError, true); assert.match(cancelled.content[0].text, /CANCELLED - process killed/); assert.match(cancelled.content[0].text, /partial\.txt/);
+  assert.match((await local.callTool({ name: 'codex_jobs_list', arguments: {} })).content[0].text, new RegExp(`job_id: ${sleepId} \\| tool: codex_run \\| status: cancelled`));
+  assert.equal((await local.callTool({ name: 'codex_job_cancel', arguments: { job_id: 'no-such-job' } })).isError, true);
+  assert.match((await local.callTool({ name: 'codex_job_cancel', arguments: { job_id: id } })).content[0].text, /already finished/);
   const image = await local.callTool({ name: 'codex_generate_image', arguments: { prompt: 'fixture image', open: false, wait_sec: 5 } });
   assert.equal(image.isError, false); assert.ok(image.content.some(c => c.type === 'image')); assert.ok(image.content.some(c => c.type === 'resource_link'));
   // Three images run as separate Codex sessions, at most CODEX_MAX_RUNNING_JOBS (2) at once.
@@ -72,8 +85,31 @@ try {
   assert.equal(overlap, 2, `Expected two runs at once, saw ${overlap}`);
   assert.match(activity, /"parallel":2/); assert.match(activity, /"input_tokens":300/);
   assert.match(activity, /running_command/); assert.match(activity, /writing_files/); assert.ok(!activity.includes('private-prompt-sentinel')); assert.ok(!activity.includes(password)); assert.ok(!activity.includes('private-command-sentinel')); assert.match(activity, /"steps":3/); assert.match(activity, /"input_tokens":100/);
+  const models = await local.callTool({ name: 'codex_models', arguments: {} });
+  assert.equal(models.content[0].text, 'allowed_models: any (no allowlist set)\ndefault_model: Codex CLI default\nreasoning_efforts: default, none, minimal, low, medium, high, xhigh\ndefault_reasoning_effort: default\n\nPass model and reasoning_effort on codex_run or codex_generate_image to choose them per task.');
   await local.close();
-  console.log('Native stdio passed: contract, detached jobs, polling, artifacts, images, parallel images, path denial, timeout, failure, child secrets, and private activity.');
+  // The model allowlist: listed, enforced before a job starts, and passed to Codex when allowed.
+  const allowEnv = { ...env, CODEX_ALLOWED_MODELS: ' gpt-5-codex , gpt-5 ', CODEX_MODEL: 'gpt-5' };
+  const limited = makeClient(); clients.push(limited);
+  await limited.connect(new StdioClientTransport({ command: bin, env: allowEnv, stderr: 'pipe' }));
+  const listed = (await limited.callTool({ name: 'codex_models', arguments: {} })).content[0].text;
+  assert.match(listed, /^allowed_models: gpt-5-codex, gpt-5\ndefault_model: gpt-5\n/);
+  for (const name of ['codex_run', 'codex_generate_image']) {
+    const refused = await limited.callTool({ name, arguments: { prompt: 'FAKE_ARGV refused', workspace: `refused-${name}`, model: 'gpt-4o', open: false } });
+    assert.equal(refused.isError, true); assert.match(refused.content[0].text, /Model "gpt-4o" is not allowed\. Allowed models: gpt-5-codex, gpt-5/);
+    await assert.rejects(fs.stat(path.join(root, `refused-${name}`)));
+  }
+  const allowed = await limited.callTool({ name: 'codex_run', arguments: { prompt: 'FAKE_ARGV allowed', workspace: 'allowed-model', model: 'gpt-5-codex', reasoning_effort: 'high', wait_sec: 5 } });
+  assert.equal(allowed.isError, false, allowed.content[0].text);
+  const argv = JSON.parse(await fs.readFile(path.join(root, 'allowed-model', 'argv.json'), 'utf8'));
+  assert.equal(argv[argv.indexOf('--model') + 1], 'gpt-5-codex'); assert.ok(argv.includes('model_reasoning_effort=high'));
+  await limited.close();
+  // A default model outside the allowlist stops the service at startup.
+  const refusedStart = spawn(bin, [], { env: { ...allowEnv, CODEX_MODEL: 'o3' }, stdio: ['ignore', 'ignore', 'pipe'] });
+  let startError = ''; refusedStart.stderr.on('data', b => { startError += b; });
+  assert.notEqual(await new Promise(resolve => refusedStart.on('close', resolve)), 0);
+  assert.match(startError, /CODEX_MODEL "o3" is not in CODEX_ALLOWED_MODELS/);
+  console.log('Native stdio passed: contract, detached jobs, polling, cancel, list, artifacts, images, parallel images, path denial, timeout, failure, child secrets, private activity, and the model allowlist.');
 
   // Reserve an unused local port. The child is managed and closes on stdin EOF.
   const reservation = createServer(); await listen(reservation); const port = reservation.address().port; await close(reservation);

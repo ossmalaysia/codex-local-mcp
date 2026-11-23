@@ -44,6 +44,7 @@ One job per module. Keep it that way.
 | `src/task.ts` | Orchestration: prepare, snapshot, run, diff, report. |
 | `src/jobs.ts` | Running tasks detached from the call that started them, and polling for results. |
 | `src/config.ts` | Environment configuration, read once at import. |
+| `src/models.ts` | Model allowlist checks (`validateModel`) and the `codex_models` report. |
 | `ui/image-viewer.ts` | The in-chat image view (an MCP App), bundled by `scripts/build-ui.mjs` into `dist/ui/image-viewer.html`. |
 | `ui/parse.ts` | Pure parsing of tool results for the view. Unit-tested; no DOM. |
 
@@ -69,8 +70,15 @@ in `SECURITY.md`.
   abandon a request at 60 seconds by default, and an image routinely takes longer. Work that
   outlasts the wait keeps running as a job and is collected with `codex_job_result`. A
   cancelled or timed-out call stops the *wait*, never the job.
+- **Cancelling a job stops the run, not the job.** `codex_job_cancel` aborts the job's signal
+  (a cancellation token in Rust); the run kills the process tree and returns normally with
+  `cancelled`, so the job still snapshots, diffs and reports what was written. Never cancel by
+  dropping or deleting the job.
 - **Validate before starting a job.** Bad sizes and workspace names must fail in the calling
   request, not become a job that fails later.
+- **A caller-chosen model goes through `validateModel()`** (Rust: `models::validate`) before a
+  job starts. With `CODEX_ALLOWED_MODELS` set, unlisted models are refused, and a default model
+  outside the list stops startup. New tools that accept `model` must call it.
 - **Concurrent jobs are capped** (`CODEX_MAX_RUNNING_JOBS`). Jobs outlive their calls, so without
   a cap a caller could start Codex processes faster than they finish.
 - **Inline budgets are measured in base64 characters, never file bytes.** A raw-byte budget

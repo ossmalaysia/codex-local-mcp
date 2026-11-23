@@ -10,13 +10,22 @@ import { z } from "zod";
 import { config } from "./config.js";
 import { readArtifact, imageMimeType, uriToPath } from "./artifacts.js";
 import {
+  cancelJob,
   clampWait,
   getJob,
+  jobStatus,
+  listJobs,
   startJob,
   reportJob,
   waitForJob,
   type Job,
 } from "./jobs.js";
+import {
+  assertModelConfig,
+  modelsReport,
+  REASONING_EFFORTS,
+  validateModel,
+} from "./models.js";
 import { openInViewer } from "./open.js";
 import {
   executeTask,
@@ -50,6 +59,13 @@ type ToolResult = {
   isError?: boolean;
 };
 
+function textResult(text: string): ToolResult {
+  return { content: [{ type: "text", text }] };
+}
+
+/** How long codex_job_cancel waits for the stopped job to settle. */
+const CANCEL_WAIT_SEC = 10;
+
 function errorResult(err: unknown): ToolResult {
   const message = err instanceof Error ? err.message : String(err);
   return {
@@ -66,6 +82,14 @@ const waitSecSchema = z
     `Seconds to wait for the result before returning a job_id instead. Default ${config.waitSec}, ` +
       `maximum ${config.maxWaitSec}, which keeps the call under common 60-second client timeouts.`,
   );
+
+/** Shared by every tool that lets the caller choose a model. */
+const modelDescription =
+  "Codex model id for this task. Defaults to the server's configured model. Call codex_models " +
+  "to see allowed values.";
+const reasoningDescription =
+  "Codex reasoning effort for this task; supported values depend on the model. Call " +
+  "codex_models to see allowed values and the default.";
 
 function runningResult(job: Job<unknown>): ToolResult {
   const elapsed = Math.round((Date.now() - job.startedAt) / 1000);
@@ -113,7 +137,7 @@ function formatTask(result: TaskResult) {
     `workspace: ${result.workspace}`,
     `exit code: ${result.exitCode ?? "n/a"}${result.signal ? ` (killed by ${result.signal})` : ""}${
       result.timedOut ? " (TIMED OUT - process killed)" : ""
-    }`,
+    }${result.cancelled ? " (CANCELLED - process killed)" : ""}`,
     `duration: ${(result.durationMs / 1000).toFixed(1)}s`,
   ].join("\n");
 
@@ -193,6 +217,8 @@ const IMAGE_VIEW_FILE = fileURLToPath(
  * an in-memory transport and drive it through a real MCP client.
  */
 export function createServer(): McpServer {
+  // A bad allowlist must stop the server, not fail every task later.
+  assertModelConfig();
   const server = new McpServer({ name: "codex-local-mcp", version });
 
   server.registerTool(
@@ -225,26 +251,18 @@ export function createServer(): McpServer {
         model: z
           .string()
           .optional()
-          .describe("Override the Codex model for this run."),
+          .describe(modelDescription),
         reasoning_effort: z
-          .enum([
-            "default",
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-          ])
+          .enum(REASONING_EFFORTS)
           .optional()
-          .describe(
-            "Model reasoning effort. Supported values depend on the model.",
-          ),
+          .describe(reasoningDescription),
         wait_sec: waitSecSchema,
       },
     },
     async (args, extra) => {
       try {
+        // Validate before starting a job, so a refused model never runs.
+        validateModel(args.model);
         const { workspace, relName } = prepareWorkspace(args.workspace);
         const job = startJob<ToolResult>("codex_run", workspace, async (job) =>
           formatTask(
@@ -255,6 +273,7 @@ export function createServer(): McpServer {
               model: args.model,
               reasoning_effort: args.reasoning_effort,
               onProgress: (progress) => reportJob(job, progress),
+              signal: job.signal,
             }),
           ),
         );
@@ -305,19 +324,11 @@ export function createServer(): McpServer {
         model: z
           .string()
           .optional()
-          .describe("Override the Codex model for this image task."),
+          .describe(modelDescription),
         reasoning_effort: z
-          .enum([
-            "default",
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-          ])
+          .enum(REASONING_EFFORTS)
           .optional()
-          .describe("Codex reasoning effort, subject to model support."),
+          .describe(reasoningDescription),
         output_format: z
           .enum(["png", "jpeg", "webp"])
           .optional()
@@ -376,6 +387,7 @@ export function createServer(): McpServer {
         const size = args.size ?? "1024x1024";
         // Reject a malformed size or workspace here, before starting a job.
         const requested = parseImageSize(size);
+        validateModel(args.model);
         const { workspace, relName } = prepareWorkspace(args.workspace);
 
         const job = startJob<ToolResult>(
@@ -395,6 +407,7 @@ export function createServer(): McpServer {
               reasoning_effort: args.reasoning_effort,
               timeout_sec: args.timeout_sec,
               onProgress: (progress) => reportJob(job, progress),
+              signal: job.signal,
             });
             return finishImages(result, requested, args.open !== false);
           },
@@ -416,7 +429,8 @@ export function createServer(): McpServer {
       title: "Collect the result of a running Codex job",
       description:
         "Get the result of a codex_run or codex_generate_image call that returned status: running. " +
-        "Waits up to wait_sec for the job to finish; if it is still running, call again. Results " +
+        "Waits up to wait_sec for the job to finish; if it is still running, call again, or stop it " +
+        "with codex_job_cancel. Results " +
         `stay available for ${Math.round(config.jobRetentionSec / 60)} minutes after the job finishes.`,
       inputSchema: {
         job_id: z
@@ -539,6 +553,99 @@ export function createServer(): McpServer {
       } catch (err) {
         return errorResult(err);
       }
+    },
+  );
+
+  server.registerTool(
+    "codex_models",
+    {
+      title: "List the Codex models and reasoning efforts allowed here",
+      description:
+        "List the model ids and reasoning efforts this server accepts, and the defaults used when " +
+        "a task does not choose. Call this before passing model or reasoning_effort to a task tool.",
+      inputSchema: {},
+    },
+    async () => ({ content: [{ type: "text", text: modelsReport() }] }),
+  );
+
+  server.registerTool(
+    "codex_job_cancel",
+    {
+      title: "Cancel a running Codex job",
+      description:
+        "Stop a running job started by codex_run or codex_generate_image. The Codex process is " +
+        "killed; files it already wrote stay in the workspace and are listed in the job's result, " +
+        "which codex_job_result returns marked CANCELLED. Cancelling a finished job does nothing.",
+      inputSchema: {
+        job_id: z.string().min(1).describe("The job_id of the job to stop."),
+      },
+    },
+    async (args) => {
+      const outcome = cancelJob(args.job_id);
+      switch (outcome.kind) {
+        case "unknown":
+          return errorResult(
+            `Unknown job "${args.job_id}". It may have expired, or the server restarted.`,
+          );
+        case "finished":
+          return textResult(
+            `status: ${outcome.status}\njob_id: ${outcome.job.id}\n\n` +
+              "The job already finished, so there was nothing to cancel. Call codex_job_result " +
+              "with this job_id to collect its result.",
+          );
+        case "already_cancelling":
+        case "cancelled": {
+          // Give the kill a moment to land so the caller usually sees the final
+          // state, but never hold the call anywhere near the client timeout.
+          await waitForJob(outcome.job, CANCEL_WAIT_SEC);
+          const status = jobStatus(outcome.job);
+          return textResult(
+            `status: ${status === "running" ? "cancelling" : status}\njob_id: ${outcome.job.id}\n` +
+              `workspace: ${outcome.job.workspace}\n\n` +
+              (status === "running"
+                ? "Cancellation was requested and the Codex process is being stopped. "
+                : "The job was stopped. ") +
+              "Call codex_job_result with this job_id for its output and any files it wrote.",
+          );
+        }
+      }
+    },
+  );
+
+  server.registerTool(
+    "codex_jobs_list",
+    {
+      title: "List Codex jobs",
+      description:
+        "List the jobs this server holds, newest first: job_id, tool, status (running, completed, " +
+        "failed or cancelled), phase, workspace and elapsed seconds. Finished jobs are kept for " +
+        `${Math.round(config.jobRetentionSec / 60)} minutes. Use it to find a job_id to poll or cancel.`,
+      inputSchema: {
+        status: z
+          .enum(["running", "finished", "all"])
+          .optional()
+          .describe('Which jobs to list. Default "all".'),
+      },
+    },
+    async (args) => {
+      const filter = args.status ?? "all";
+      const now = Date.now();
+      const lines = listJobs()
+        .filter((job) => {
+          const running = !job.outcome;
+          return filter === "all" || (filter === "running") === running;
+        })
+        .map((job) => {
+          const elapsed = Math.round(((job.finishedAt ?? now) - job.startedAt) / 1000);
+          // Never the prompt: this is a listing anyone holding the connection can read.
+          return (
+            `job_id: ${job.id} | tool: ${job.label} | status: ${jobStatus(job)} | ` +
+            `phase: ${job.progress?.phase ?? "queued"} | elapsed: ${elapsed}s | workspace: ${job.workspace}`
+          );
+        });
+      return textResult(
+        lines.length ? lines.join("\n") : `No ${filter === "all" ? "" : `${filter} `}jobs.`,
+      );
     },
   );
 

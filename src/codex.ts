@@ -3,6 +3,9 @@ import path from "node:path";
 import { config } from "./config.js";
 import { sandboxArguments } from "./sandbox.js";
 import { CodexProgress, type TaskPhase } from "./activity.js";
+import { REASONING_EFFORTS, SAFE_MODEL, UnsafeArgumentError } from "./models.js";
+
+export { UnsafeArgumentError };
 
 export interface RunOptions {
   prompt: string;
@@ -11,6 +14,12 @@ export interface RunOptions {
   model?: string;
   reasoningEffort?: string;
   onProgress?: (phase: TaskPhase) => void;
+  /**
+   * Aborting stops the run: the process tree is killed and the promise resolves
+   * normally with `cancelled: true`, so the caller still diffs and reports
+   * whatever the run wrote before it was stopped.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunResult {
@@ -19,6 +28,7 @@ export interface RunResult {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  cancelled: boolean;
   durationMs: number;
   command: string;
 }
@@ -28,21 +38,6 @@ export class CodexNotFoundError extends Error {
     super(
       `Could not run "${bin}". Install the Codex CLI (npm i -g @openai/codex), run "codex login", ` +
         `or set CODEX_BIN to its full path.`,
-    );
-  }
-}
-
-/**
- * Values that reach a Windows command line must not be able to smuggle in
- * environment expansion or quoting tricks. Model names are the only free-form
- * argument we pass, so they are restricted to characters real model ids use.
- */
-const SAFE_MODEL = /^[A-Za-z0-9._:/-]{1,128}$/;
-
-export class UnsafeArgumentError extends Error {
-  constructor(value: string) {
-    super(
-      `Refusing to pass model "${value}": only letters, digits and . _ : / - are allowed.`,
     );
   }
 }
@@ -69,11 +64,7 @@ function buildArgs(opts: RunOptions): string[] {
     args.push("--model", model);
   }
   if (opts.reasoningEffort && opts.reasoningEffort !== "default") {
-    if (
-      !["none", "minimal", "low", "medium", "high", "xhigh"].includes(
-        opts.reasoningEffort,
-      )
-    )
+    if (!(REASONING_EFFORTS as readonly string[]).includes(opts.reasoningEffort))
       throw new Error("Invalid reasoning effort");
     args.push("-c", `model_reasoning_effort=${opts.reasoningEffort}`);
   }
@@ -265,6 +256,20 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
     ? commandLine
     : `${config.codexBin} ${rawArgs.join(" ")}`;
 
+  // Cancelled before it started: there is nothing to kill, so do not start it.
+  if (opts.signal?.aborted) {
+    return Promise.resolve({
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      signal: null,
+      timedOut: false,
+      cancelled: true,
+      durationMs: 0,
+      command,
+    });
+  }
+
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, {
       // Deliberately NOT the task workspace: on Windows the executable lookup
@@ -281,6 +286,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
     const stderr = new BoundedBuffer(config.maxOutputChars);
     const progress = new CodexProgress((phase) => opts.onProgress?.(phase));
     let timedOut = false;
+    let cancelled = false;
     let settled = false;
     let reaper: NodeJS.Timeout | undefined;
 
@@ -289,25 +295,40 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
       settled = true;
       clearTimeout(timer);
       if (reaper) clearTimeout(reaper);
+      opts.signal?.removeEventListener("abort", onAbort);
       resolve({
         stdout: stdout.toString(),
         stderr: stderr.toString(),
         exitCode,
         signal,
         timedOut,
+        cancelled,
         durationMs: Date.now() - started,
         command,
       });
     };
 
-    const timer = setTimeout(() => {
-      timedOut = true;
+    // Shared by the timeout and cancellation: kill the whole tree, then settle.
+    const stop = () => {
+      if (reaper || settled) return;
       if (child.pid) killTree(child.pid);
       // A detached grandchild can hold the pipes open, so "close" may never
       // arrive. Settle anyway shortly after the kill rather than hanging.
       reaper = setTimeout(() => finish(null, "SIGKILL"), 5_000);
       reaper.unref();
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stop();
     }, opts.timeoutSec * 1000);
+
+    function onAbort() {
+      if (settled || timedOut) return;
+      cancelled = true;
+      stop();
+    }
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout.on("data", (chunk: Buffer) =>
       stdout.push(chunk.toString("utf8")),
@@ -323,6 +344,7 @@ export function runCodex(opts: RunOptions): Promise<RunResult> {
       settled = true;
       clearTimeout(timer);
       if (reaper) clearTimeout(reaper);
+      opts.signal?.removeEventListener("abort", onAbort);
       if (err.code === "ENOENT") {
         reject(new CodexNotFoundError(config.codexBin));
         return;

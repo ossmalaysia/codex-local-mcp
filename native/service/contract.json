@@ -21,11 +21,11 @@
             "type": "number"
           },
           "model": {
-            "description": "Override the Codex model for this run.",
+            "description": "Codex model id for this task. Defaults to the server's configured model. Call codex_models to see allowed values.",
             "type": "string"
           },
           "reasoning_effort": {
-            "description": "Model reasoning effort. Supported values depend on the model.",
+            "description": "Codex reasoning effort for this task; supported values depend on the model. Call codex_models to see allowed values and the default.",
             "type": "string",
             "enum": [
               "default",
@@ -84,11 +84,11 @@
             ]
           },
           "model": {
-            "description": "Override the Codex model for this image task.",
+            "description": "Codex model id for this task. Defaults to the server's configured model. Call codex_models to see allowed values.",
             "type": "string"
           },
           "reasoning_effort": {
-            "description": "Codex reasoning effort, subject to model support.",
+            "description": "Codex reasoning effort for this task; supported values depend on the model. Call codex_models to see allowed values and the default.",
             "type": "string",
             "enum": [
               "default",
@@ -159,7 +159,7 @@
     {
       "name": "codex_job_result",
       "title": "Collect the result of a running Codex job",
-      "description": "Get the result of a codex_run or codex_generate_image call that returned status: running. Waits up to wait_sec for the job to finish; if it is still running, call again. Results stay available for 60 minutes after the job finishes.",
+      "description": "Get the result of a codex_run or codex_generate_image call that returned status: running. Waits up to wait_sec for the job to finish; if it is still running, call again, or stop it with codex_job_cancel. Results stay available for 60 minutes after the job finishes.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -202,6 +202,64 @@
         "required": [
           "path"
         ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "codex_models",
+      "title": "List the Codex models and reasoning efforts allowed here",
+      "description": "List the model ids and reasoning efforts this server accepts, and the defaults used when a task does not choose. Call this before passing model or reasoning_effort to a task tool.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "codex_job_cancel",
+      "title": "Cancel a running Codex job",
+      "description": "Stop a running job started by codex_run or codex_generate_image. The Codex process is killed; files it already wrote stay in the workspace and are listed in the job's result, which codex_job_result returns marked CANCELLED. Cancelling a finished job does nothing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The job_id of the job to stop."
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "codex_jobs_list",
+      "title": "List Codex jobs",
+      "description": "List the jobs this server holds, newest first: job_id, tool, status (running, completed, failed or cancelled), phase, workspace and elapsed seconds. Finished jobs are kept for 60 minutes. Use it to find a job_id to poll or cancel.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "Which jobs to list. Default \"all\".",
+            "type": "string",
+            "enum": [
+              "running",
+              "finished",
+              "all"
+            ]
+          }
+        },
         "$schema": "http://json-schema.org/draft-07/schema#"
       },
       "execution": {

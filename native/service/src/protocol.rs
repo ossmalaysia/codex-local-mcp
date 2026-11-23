@@ -1,4 +1,4 @@
-use crate::{activity, artifacts, jobs::Jobs};
+use crate::{activity, artifacts, jobs::Jobs, models};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
@@ -134,6 +134,9 @@ impl ServerHandler for Protocol {
             "codex_generate_image",
             "codex_job_result",
             "codex_read_artifact",
+            "codex_models",
+            "codex_job_cancel",
+            "codex_jobs_list",
         ]
         .contains(&name)
         {
@@ -193,6 +196,15 @@ impl ServerHandler for Protocol {
                     Err(_) => artifacts::error("Artifact worker failed"),
                 }
             }
+            "codex_models" => {
+                json!({"content":[artifacts::text(models::report(&self.jobs.config))]})
+            }
+            "codex_job_cancel" => {
+                self.jobs
+                    .cancel_result(args["job_id"].as_str().unwrap_or(""))
+                    .await
+            }
+            "codex_jobs_list" => self.jobs.list(args["status"].as_str().unwrap_or("all")),
             _ => unreachable!(),
         };
         Ok(convert::<CallToolResult>(result)?.into())
