@@ -1,5 +1,6 @@
 pub mod cloudflare;
 pub mod migration;
+pub mod projects;
 pub mod runtime;
 pub mod secure;
 pub mod settings;
