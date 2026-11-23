@@ -4,6 +4,7 @@ import path from "node:path";
 import { config } from "./config.js";
 import { BoundedBuffer, childEnv, killTree, withEnv } from "./codex.js";
 import { assertInsideRoot } from "./workspace.js";
+import { TaskCancelledError } from "./task.js";
 
 /**
  * Git operations for codex_task: fetch a ref into a throwaway worktree of the
@@ -48,7 +49,12 @@ export interface GitResult {
  * With `toFile`, stdout goes to that open file instead, unbounded and intact:
  * a patch must never be cut short in memory.
  */
-export function git(cwd: string, args: string[], toFile?: FileHandle): Promise<GitResult> {
+export function git(
+  cwd: string,
+  args: string[],
+  toFile?: FileHandle,
+  signal?: AbortSignal,
+): Promise<GitResult> {
   if (!path.isAbsolute(config.gitBin)) {
     return Promise.reject(
       new GitError(`Could not find git ("${config.gitBin}"). Install git or set CODEX_GIT_BIN to its full path.`),
@@ -73,6 +79,12 @@ export function git(cwd: string, args: string[], toFile?: FileHandle): Promise<G
       if (child.pid) killTree(child.pid);
     }, GIT_TIMEOUT_MS);
     timer.unref();
+    // A cancelled job stops a long fetch instead of waiting for it.
+    const onAbort = () => {
+      if (child.pid) killTree(child.pid);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.on("close", () => signal?.removeEventListener("abort", onAbort));
     child.stdout.on("data", (b: Buffer) => {
       if (!toFile) return stdout.push(b.toString("utf8"));
       // Backpressure: pause git while the chunk is written, in order.
@@ -141,11 +153,28 @@ export interface Worktree {
  * in a fresh worktree at `dir`. Fetching uses the user's own credentials and
  * runs no repository code.
  */
-export async function createWorktree(clone: string, ref: string, dir: string): Promise<Worktree> {
+export async function createWorktree(
+  clone: string,
+  ref: string,
+  dir: string,
+  signal?: AbortSignal,
+): Promise<Worktree> {
   await fs.mkdir(path.dirname(dir), { recursive: true });
   await assertInsideRoot(dir);
   return withProjectLock(clone, async () => {
-    const fetched = await git(clone, ["fetch", "--no-tags", "--no-recurse-submodules", "origin", ref]);
+    // Cancelled while queued behind another task on this clone: do nothing.
+    if (signal?.aborted) {
+      throw new TaskCancelledError("Cancelled before Codex started; nothing ran and no files changed.");
+    }
+    const fetched = await git(
+      clone,
+      ["fetch", "--no-tags", "--no-recurse-submodules", "origin", ref],
+      undefined,
+      signal,
+    );
+    if (signal?.aborted) {
+      throw new TaskCancelledError("Cancelled before Codex started; nothing ran and no files changed.");
+    }
     if (fetched.code !== 0) {
       throw new GitError(`Could not fetch "${ref}" from origin: ${fetched.stderr.trim() || `git exited with ${fetched.code}`}`);
     }

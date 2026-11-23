@@ -40,6 +40,8 @@ describe("codex_models without an allowlist", () => {
       "codex_job_result",
       "codex_read_artifact",
       "codex_models",
+      "codex_job_cancel",
+      "codex_jobs_list",
       "codex_projects",
       "codex_task",
     ]);

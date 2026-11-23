@@ -15,8 +15,8 @@ Use the pinned Rust toolchain and Node.js for the existing compatibility tests.
 ```powershell
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
 cargo build --locked --bins --examples
+cargo test --locked --all-targets
 npm run build
 node scripts/export-native-contract.mjs --check
 npx playwright install chromium

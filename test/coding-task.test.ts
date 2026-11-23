@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 // @ts-expect-error - plain JS test helper
 import { installFakeCodex, makeRoot } from "./setup-fake-codex.mjs";
-import { resultText, useMcpClient, type ToolResult } from "./mcp-client.js";
+import { jobIdOf, resultText, useMcpClient, type ToolResult } from "./mcp-client.js";
 
 /**
  * codex_task end to end, hermetically: a local bare repository stands in for
@@ -216,6 +216,45 @@ describe("codex_task", () => {
     expect(result.isError).toBe(false);
     expect(fs.existsSync(marker)).toBe(false);
   });
+
+  it("cancels a running task, reports CANCELLED and still removes the worktree", async () => {
+    const started = await call("codex_task", { project: "plain", ref: "main", task: "SLEEP", wait_sec: 0 });
+    expect(resultText(started)).toContain("status: running");
+    const id = jobIdOf(started);
+    const worktree = path.join(root, "tasks", "plain", id);
+    const pidFile = path.join(worktree, "pids.txt");
+    const until = async (check: () => boolean, ms: number) => {
+      for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) {
+        if (check()) return true;
+      }
+      return check();
+    };
+    expect(await until(() => fs.existsSync(pidFile), 15_000)).toBe(true);
+    const pids = fs.readFileSync(pidFile, "utf8").trim().split(" ").map(Number);
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const cancelled = await call("codex_job_cancel", { job_id: id });
+    expect(cancelled.isError).toBeFalsy();
+    const result = await call("codex_job_result", { job_id: id, wait_sec: 20 });
+    expect(result.isError).toBe(true);
+    expect(header(result, "status")).toBe("cancelled");
+    expect(header(result, "exit code")).toContain("(CANCELLED - process killed)");
+    // What Codex wrote before the cancel is still in the patch.
+    expect(section(result, "patch")).toContain("partial.txt");
+    expect(await until(() => !pids.some(alive), 10_000)).toBe(true);
+    // The worktree and its registration are gone; the patch is kept.
+    expect(fs.existsSync(worktree)).toBe(false);
+    expect(fs.existsSync(path.join(root, "tasks", "plain", `${id}.patch`))).toBe(true);
+    expect(worktrees()).not.toContain(id);
+    expect(resultText(await call("codex_jobs_list", {}))).toContain(`job_id: ${id} | tool: codex_task | status: cancelled`);
+  }, 40_000);
 
   it("rejects bad requests before starting a job", async () => {
     const bad: Array<[Record<string, unknown>, RegExp]> = [

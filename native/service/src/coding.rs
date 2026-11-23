@@ -144,9 +144,12 @@ pub async fn execute(
     let patch_file = dir.join(format!("{}.patch", job.id));
     jobs.phase(job, "preparing");
     let result = async {
-        let base =
-            gitwork::create_worktree(config, &input.project.path, &input.reference, &worktree)
-                .await?;
+        // codex_job_cancel stops a fetch or checkout in progress: dropping the
+        // git future kills its process tree, and the worktree is removed below.
+        let base = tokio::select! {
+            base = gitwork::create_worktree(config, &input.project.path, &input.reference, &worktree) => base?,
+            _ = job.cancel.cancelled() => bail!("Cancelled before Codex started; nothing ran and no files changed."),
+        };
         let cache = workspace::prepare(
             &config.root,
             Some(&format!(".cache/{}", input.project.name)),
@@ -154,6 +157,7 @@ pub async fn execute(
         let permit = tokio::select! {
             permit = jobs.runs.clone().acquire_owned() => permit?,
             _ = jobs.cancel.cancelled() => bail!("Server stopped"),
+            _ = job.cancel.cancelled() => bail!("Cancelled before Codex started; nothing ran and no files changed."),
         };
         jobs.phase(job, "running");
         let report_jobs = jobs.clone();
@@ -180,7 +184,8 @@ pub async fn execute(
             ),
             timeout,
             &job.options,
-            jobs.cancel.child_token(),
+            // The job's own token: cancelled by codex_job_cancel or with the server.
+            job.cancel.child_token(),
             report,
             &extra,
         )
@@ -221,6 +226,7 @@ pub async fn execute(
             review: input.review,
             code: run.code,
             timed_out: run.timed_out,
+            cancelled: run.cancelled,
             duration: 0.0,
             summary: cap(&summary, config.output),
             diffstat: String::new(),
@@ -286,6 +292,8 @@ struct Report {
     review: bool,
     code: Option<i32>,
     timed_out: bool,
+    /// Stopped by codex_job_cancel while Codex was running.
+    cancelled: bool,
     duration: f64,
     summary: String,
     diffstat: String,
@@ -300,10 +308,16 @@ impl Report {
     /// The header lines are stable and machine-readable, and match the
     /// TypeScript service, so a calling agent can apply the patch on `base`.
     fn format(&self) -> Value {
-        let failed = self.timed_out || self.code != Some(0);
+        let failed = self.timed_out || self.cancelled || self.code != Some(0);
         let header = format!(
-            "status: {}\njob_id: {}\nproject: {}\nref: {}\nbase: {}\nexit code: {}{}\nduration: {:.1}s",
-            if failed { "failed" } else { "completed" },
+            "status: {}\njob_id: {}\nproject: {}\nref: {}\nbase: {}\nexit code: {}{}{}\nduration: {:.1}s",
+            if self.cancelled {
+                "cancelled"
+            } else if failed {
+                "failed"
+            } else {
+                "completed"
+            },
             self.job_id,
             self.project,
             self.reference,
@@ -311,6 +325,11 @@ impl Report {
             self.code.map_or("n/a".into(), |c| c.to_string()),
             if self.timed_out {
                 " (TIMED OUT - process killed)"
+            } else {
+                ""
+            },
+            if self.cancelled {
+                " (CANCELLED - process killed)"
             } else {
                 ""
             },

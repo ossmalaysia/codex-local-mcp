@@ -141,6 +141,8 @@ impl ServerHandler for Protocol {
             "codex_job_result",
             "codex_read_artifact",
             "codex_models",
+            "codex_job_cancel",
+            "codex_jobs_list",
             "codex_projects",
             "codex_task",
         ]
@@ -213,6 +215,12 @@ impl ServerHandler for Protocol {
             "codex_models" => {
                 json!({"content":[artifacts::text(models::report(&self.jobs.config))]})
             }
+            "codex_job_cancel" => {
+                self.jobs
+                    .cancel_result(args["job_id"].as_str().unwrap_or(""))
+                    .await
+            }
+            "codex_jobs_list" => self.jobs.list(args["status"].as_str().unwrap_or("all")),
             _ => unreachable!(),
         };
         Ok(convert::<CallToolResult>(result)?.into())

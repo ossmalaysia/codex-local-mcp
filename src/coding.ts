@@ -5,7 +5,7 @@ import { capOutput, runCodex } from "./codex.js";
 import { readArtifact } from "./artifacts.js";
 import { collectPatch, createWorktree, removeWorktree } from "./gitwork.js";
 import type { Project } from "./projects.js";
-import { clampTimeout } from "./task.js";
+import { clampTimeout, TaskCancelledError } from "./task.js";
 import type { TaskProgress } from "./activity.js";
 
 /**
@@ -27,6 +27,8 @@ export interface CodingTaskInput {
   reasoning_effort?: string;
   timeout_sec?: number;
   onProgress?: (progress: TaskProgress) => void;
+  /** Aborted by codex_job_cancel. Stops git and Codex; cleanup still runs. */
+  signal?: AbortSignal;
 }
 
 export interface CodingTaskResult {
@@ -38,6 +40,8 @@ export interface CodingTaskResult {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  /** Stopped by codex_job_cancel while Codex was running. */
+  cancelled: boolean;
   durationMs: number;
   summary: string;
   diffstat: string;
@@ -112,7 +116,11 @@ export async function executeCodingTask(input: CodingTaskInput): Promise<CodingT
 
   input.onProgress?.({ phase: "preparing" });
   try {
-    const { base } = await createWorktree(project.path, input.ref, worktree);
+    const { base } = await createWorktree(project.path, input.ref, worktree, input.signal);
+    // A cancel that lands during the fetch or checkout: nothing ran yet.
+    if (input.signal?.aborted) {
+      throw new TaskCancelledError("Cancelled before Codex started; nothing ran and no files changed.");
+    }
     await fs.mkdir(cache, { recursive: true });
     input.onProgress?.({ phase: "running" });
     const run = await runCodex({
@@ -125,6 +133,7 @@ export async function executeCodingTask(input: CodingTaskInput): Promise<CodingT
       sandbox: input.mode === "review" ? { readOnly: true } : { writableRoots: [cache] },
       env: cacheEnv(cache),
       outputLastMessage: lastMessage,
+      signal: input.signal,
     });
     input.onProgress?.({ phase: "collecting_files", exitCode: run.exitCode, timedOut: run.timedOut });
 
@@ -150,6 +159,7 @@ export async function executeCodingTask(input: CodingTaskInput): Promise<CodingT
       exitCode: run.exitCode,
       signal: run.signal,
       timedOut: run.timedOut,
+      cancelled: run.cancelled,
       durationMs: 0,
       summary: capOutput(summary),
       diffstat: "",

@@ -240,6 +240,8 @@ See the [Claude Code remote MCP documentation](https://code.claude.com/docs/en/m
 | `codex_job_result` | `job_id`, `wait_sec?` | Collect the result of a task that was still running. |
 | `codex_read_artifact` | `path`, `max_bytes?` | Read a file from a workspace. |
 | `codex_models` | *(none)* | List the models and reasoning efforts this server accepts, and the defaults. |
+| `codex_job_cancel` | `job_id` | Stop a running task. Files it already wrote stay in the workspace. |
+| `codex_jobs_list` | `status?` (`running`, `finished` or `all`) | List tasks, newest first, with their status and workspace. |
 | `codex_projects` | *(none)* | List the local git projects `codex_task` can use, with their check names. Paths are not shown. |
 | `codex_task` | `task`, `project`, `ref`, `mode?`, `acceptance?`, `checks?`, `return?`, `model?`, `reasoning_effort?`, `timeout_sec?`, `wait_sec?` | Run a coding task on a local git project and return a patch. See below. |
 
@@ -278,6 +280,14 @@ workspace: /path/to/codex-workspaces/my-task
 Codex keeps working. The model calls `codex_job_result` with the `job_id` until the task
 finishes. Finished results stay available for one hour. Jobs are held in memory, so a server
 restart loses the `job_id`, but the files remain in the workspace.
+
+`codex_jobs_list` shows one line per task: `job_id`, tool, status (`running`, `completed`,
+`failed` or `cancelled`), phase, elapsed seconds and workspace. It never shows prompts.
+`codex_job_cancel` stops a running task by killing its Codex process tree. Its result, from
+`codex_job_result`, reads like a timeout but says `(CANCELLED - process killed)` and lists the
+files written before the cancel. A cancelled task frees its place under
+`CODEX_MAX_RUNNING_JOBS` as soon as Codex has stopped. Cancelling a finished task changes
+nothing.
 
 `codex_generate_image` defaults to `quality: "low"` and `size: "1024x1024"`, which is a fast
 draft. `size` must be `WIDTHxHEIGHT` or `auto`. The size is a request to the image tool, so the
