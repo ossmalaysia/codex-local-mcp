@@ -42,12 +42,16 @@ struct ProjectEnv<'a> {
     checks: BTreeMap<&'a str, &'a str>,
 }
 
-/// `^[A-Za-z0-9._-]{1,64}$`
+/// `^[A-Za-z0-9._-]{1,64}$`, except `.` and `..`: the service uses project
+/// names as folder names and refuses those two, which would mark the whole
+/// CODEX_PROJECTS value invalid.
 pub fn valid_name(name: &str) -> bool {
     (1..=64).contains(&name.len())
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        && name != "."
+        && name != ".."
 }
 /// `^[A-Za-z0-9._:/-]{1,128}$`, the same characters the task options accept.
 pub fn valid_model(model: &str) -> bool {
@@ -350,7 +354,7 @@ mod tests {
     #[test]
     fn rejects_invalid_and_duplicate_names() {
         let dir = repo();
-        for name in ["", "has space", "a/b", "ü", &"x".repeat(65)] {
+        for name in ["", "has space", "a/b", "ü", ".", "..", &"x".repeat(65)] {
             assert!(message(check(&[project(name, dir.path())], &[])).contains("Project names"));
         }
         let error = message(check(

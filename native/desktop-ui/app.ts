@@ -201,9 +201,10 @@ function apply(s: Json) {
   $("generate-password").classList.toggle("primary", !s.passwordSaved);
   tunnelView();
 }
-// Same rules as the service: names are `^[A-Za-z0-9._-]{1,64}$`, model IDs
-// `^[A-Za-z0-9._:/-]{1,128}$`. The desktop service checks them again.
-const namePattern = /^[A-Za-z0-9._-]{1,64}$/;
+// Same rules as the service: names are `^[A-Za-z0-9._-]{1,64}$` but not `.`
+// or `..` (names become folder names), model IDs `^[A-Za-z0-9._:/-]{1,128}$`.
+// The desktop service checks them again.
+const namePattern = /^(?!\.\.?$)[A-Za-z0-9._-]{1,64}$/;
 const modelPattern = /^[A-Za-z0-9._:/-]{1,128}$/;
 function models() {
   return input("allowed-models")
